@@ -7,7 +7,7 @@ After you find and change the texture you want you then click the repack button 
 
 After repacking is done go into the folder where the package and manifest files got repacked to and cut both the "packages" and "manifests" folders and place them into the directory the original ones are, for example .\ready-at-dawn-echo-arena\_data\5932408047\rad15\win10.
 
-Then open the game and see your new textures.
+Then open the game and see your new textures. When replacing textures if the replace texture button is blanked out click on another texture then click back to the one you want to change, will fix this in next update.
 
 ps. the config.json file saves all folder directories and allows you to change the default external editor to what you want. It is recommended to use Renderdoc.
 
