@@ -100,7 +100,7 @@ class EVRToolsManager:
             
             print(f"Running extraction: {' '.join(cmd)}")
             result = subprocess.run(cmd, capture_output=True, text=True, 
-                                  cwd=os.path.dirname(self.tool_path), timeout=600)
+                                  cwd=os.path.dirname(self.tool_path), timeout=2000)
             
             if result.returncode == 0:
                 return True, f"Extracted to {output_dir}"
@@ -109,7 +109,7 @@ class EVRToolsManager:
                 return False, f"Extraction failed: {error_msg}"
                 
         except subprocess.TimeoutExpired:
-            return False, "Extraction timed out after 10 minutes"
+            return False, "Extraction timed out after 35 minutes"
         except Exception as e:
             return False, f"Extraction error: {str(e)}"
     
@@ -130,7 +130,7 @@ class EVRToolsManager:
             
             print(f"Running repacking: {' '.join(cmd)}")
             result = subprocess.run(cmd, capture_output=True, text=True, 
-                                  cwd=os.path.dirname(self.tool_path), timeout=300)
+                                  cwd=os.path.dirname(self.tool_path), timeout=2000)
             
             if result.returncode == 0:
                 return True, f"Repacked successfully to {output_dir}"
@@ -139,7 +139,7 @@ class EVRToolsManager:
                 return False, f"Repacking failed: {error_msg}"
                 
         except subprocess.TimeoutExpired:
-            return False, "Repacking timed out after 5 minutes"
+            return False, "Repacking timed out after 35 minutes"
         except Exception as e:
             return False, f"Repacking error: {str(e)}"
 
@@ -1420,4 +1420,5 @@ def main():
     root.mainloop()
 
 if __name__ == '__main__':
+
     main()
