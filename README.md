@@ -14,3 +14,6 @@ ps. the config.json file saves all folder directories and allows you to change t
 Any questions message @he_is_the_cat on discord and special thanks to Exhibitmark for creating the original extraction tool and Goopsie for making it easier to use.
 https://github.com/Exhibitmark/carnation
 https://github.com/goopsie/evrFileTools
+
+
+IMPORTANT --> when making your dds textures do not use a converter, instead use a photo editor and export as dds, a free online tool is https://www.photopea.com, "drag and drop, edit it then export -> more -> dds" here you can lock the resolution and change it also.
