@@ -3,7 +3,6 @@ import sys
 import struct
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
-from PIL import Image, ImageTk, ImageDraw  # type: ignore
 import shutil
 import tempfile
 import subprocess
@@ -14,12 +13,58 @@ import time
 import hashlib
 import ctypes
 
+# Check and install required dependencies
+try:
+    from PIL import Image, ImageTk, ImageDraw  # type: ignore
+    HAS_PIL = True
+except ImportError:
+    HAS_PIL = False
+    print("Pillow library not found. Please install it with: pip install Pillow")
+
 try:
     import imageio.v3 as iio # type: ignore
     HAS_IMAGEIO = True
 except ImportError:
     HAS_IMAGEIO = False
     print("imageio not available - using fallback DDS loading")
+
+# If PIL is not available, show error and offer to install
+if not HAS_PIL:
+    root = tk.Tk()
+    root.withdraw()  # Hide the main window
+    
+    result = messagebox.askyesno(
+        "Missing Dependencies", 
+        "Pillow library is required but not installed.\n\n"
+        "Would you like to install it now?",
+        icon='warning'
+    )
+    
+    if result:
+        try:
+            # Try to install Pillow
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "Pillow"])
+            messagebox.showinfo(
+                "Installation Complete", 
+                "Pillow has been installed successfully.\n\n"
+                "Please restart the application."
+            )
+        except subprocess.CalledProcessError:
+            messagebox.showerror(
+                "Installation Failed", 
+                "Failed to install Pillow automatically.\n\n"
+                "Please install it manually with:\n"
+                "pip install Pillow"
+            )
+        sys.exit(1)
+    else:
+        messagebox.showinfo(
+            "Installation Required", 
+            "Please install Pillow manually with:\n"
+            "pip install Pillow\n\n"
+            "Then restart the application."
+        )
+        sys.exit(1)
 
 CONFIG_FILE = "config.json"
 CACHE_DIR = "texture_cache"
@@ -341,18 +386,17 @@ class DDSHandler:
 class TextureLoader:
     @staticmethod
     def get_cache_path(dds_path):
-        """Generate a cache file path based on the DDS file's hash and modification time"""
+        """Generate a cache file path based on the original DDS file name"""
         # Create cache directory if it doesn't exist
         script_dir = os.path.dirname(os.path.abspath(__file__))
         cache_dir = os.path.join(script_dir, CACHE_DIR)
         os.makedirs(cache_dir, exist_ok=True)
         
-        # Generate a unique hash for the file based on its path and modification time
-        file_stat = os.stat(dds_path)
-        hash_input = f"{dds_path}_{file_stat.st_mtime}"
-        file_hash = hashlib.md5(hash_input.encode()).hexdigest()
+        # Use the original file name but with .png extension
+        original_name = os.path.basename(dds_path)
+        png_name = os.path.splitext(original_name)[0] + ".png"
         
-        return os.path.join(cache_dir, f"{file_hash}.png")
+        return os.path.join(cache_dir, png_name)
     
     @staticmethod
     def load_texture(dds_path):
@@ -745,6 +789,11 @@ class EchoVRTextureViewer:
         self.all_textures = []
         self.filtered_textures = []
         
+        # For batch loading
+        self.is_loading_all = False
+        self.textures_to_load = []
+        self.current_batch_index = 0
+        
         self.setup_ui()
         
         if self.output_folder and os.path.exists(self.output_folder):
@@ -988,6 +1037,14 @@ class EchoVRTextureViewer:
                                       font=('Arial', 9, 'bold'),
                                       state=tk.DISABLED)
         self.replace_button.pack(side=tk.LEFT, padx=5)
+        
+        # Add "Load All Textures" button
+        self.load_all_button = tk.Button(button_frame, text="Load All Textures", 
+                                       command=self.start_loading_all_textures,
+                                       bg='#4cd964',
+                                       fg=self.colors['text_light'],
+                                       font=('Arial', 9, 'bold'))
+        self.load_all_button.pack(side=tk.LEFT, padx=5)
         
         self.resolution_status = tk.Label(button_frame, text="",
                                         fg=self.colors['text_muted'], bg=self.colors['bg_dark'],
@@ -1241,7 +1298,7 @@ class EchoVRTextureViewer:
                 output_dir, 
                 self.package_name, 
                 self.data_folder, 
-                                self.input_folder  # Using input_folder as modifiedFolder
+                self.input_folder  # Using input_folder as modifiedFolder
             )
             
             self.root.after(0, lambda: self.on_repacking_complete(success, message, output_dir))
@@ -1440,7 +1497,756 @@ class EchoVRTextureViewer:
         self.update_canvas_placeholder(self.replacement_canvas, "Error loading replacement")
     
     def load_dds(self, file_path):
-        return TextureLoader.load_texture(file_path)
+        """Load DDS file and ensure it's cached with original name"""
+        cache_path = TextureLoader.get_cache_path(file_path)
+        
+        # If cached version exists, use it
+        if os.path.exists(cache_path):
+            try:
+                return Image.open(cache_path).convert("RGBA")
+            except Exception as e:
+                print(f"Failed to load cached texture: {e}")
+                try:
+                    os.remove(cache_path)
+                except:
+                    pass
+            self.replacement_size = None
+        
+        # For search functionality
+        self.all_textures = []
+        self.filtered_textures = []
+        
+        # For batch loading
+        self.is_loading_all = False
+        self.textures_to_load = []
+        self.current_batch_index = 0
+        
+        self.setup_ui()
+        
+        if self.output_folder and os.path.exists(self.output_folder):
+            self.set_output_folder(self.output_folder)
+        
+        if self.input_folder and os.path.exists(self.input_folder):
+            self.set_input_folder(self.input_folder)
+            
+        if self.data_folder and os.path.exists(self.data_folder):
+            self.set_data_folder(self.data_folder)
+            
+        if self.extracted_folder and os.path.exists(self.extracted_folder):
+            self.set_extracted_folder(self.extracted_folder)
+    
+    def set_window_icon(self):
+        """Set custom icon for the application from _internal folder"""
+        try:
+            # Get the script directory
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            
+            # Path to icon in _internal folder
+            internal_dir = os.path.join(script_dir, "_internal")
+            icon_path = os.path.join(internal_dir, "icon.ico")
+            
+            # Check if _internal folder exists and icon is there
+            if os.path.exists(internal_dir) and os.path.exists(icon_path):
+                # For Windows
+                if os.name == 'nt':
+                    self.root.iconbitmap(icon_path)
+                
+                # For other platforms, try to use the icon as well
+                else:
+                    # Try to convert ICO to PNG for non-Windows systems
+                    try:
+                        img = Image.open(icon_path)
+                        photo = ImageTk.PhotoImage(img)
+                        self.root.iconphoto(True, photo)
+                        # Store reference to prevent garbage collection
+                        self.icon_image = photo
+                    except:
+                        # Fallback if conversion fails
+                        pass
+            
+            # Set taskbar icon for Windows
+            if os.name == 'nt':
+                try:
+                    # Convert to absolute path
+                    icon_path = os.path.abspath(icon_path)
+                    
+                    # Load the icon using ctypes if it exists
+                    if os.path.exists(icon_path):
+                        # This sets the taskbar icon
+                        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("EchoVR.TextureEditor.1.0")
+                except Exception as e:
+                    print(f"Error setting taskbar icon: {e}")
+        
+        except Exception as e:
+            print(f"Error setting application icon: {e}")
+        
+    def setup_ui(self):
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(0, weight=1)
+        
+        main_frame = ttk.Frame(self.root, padding=10)
+        main_frame.grid(row=0, column=0, sticky='nsew')
+        main_frame.columnconfigure(1, weight=1)
+        main_frame.rowconfigure(1, weight=1)
+        
+        # Configure custom style for the search entry
+        self.style.configure('Custom.TEntry', 
+                           fieldbackground='#2a2a5a',  # Background color
+                           foreground='#ffffff',       # Text color
+                           borderwidth=1,
+                           focusthickness=1,
+                           padding=5)
+        
+        # Create header frame
+        header_frame = ttk.Frame(main_frame)
+        header_frame.grid(row=0, column=0, columnspan=3, sticky='ew', pady=(0, 5))
+        header_frame.columnconfigure(0, weight=1)
+        
+        # Add icon to title bar if available
+        try:
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            internal_dir = os.path.join(script_dir, "_internal")
+            icon_path = os.path.join(internal_dir, "icon.ico")
+            
+            if os.path.exists(internal_dir) and os.path.exists(icon_path):
+                img = Image.open(icon_path)
+                img = img.resize((20, 20), Image.Resampling.LANCZOS)
+                self.title_icon = ImageTk.PhotoImage(img)
+                
+                icon_label = tk.Label(header_frame, image=self.title_icon, bg=self.colors['bg_dark'])
+                icon_label.grid(row=0, column=0, sticky='w', padx=(10, 5))
+        except:
+            pass  # Continue without icon if there's an error
+        
+        title_label = tk.Label(header_frame, text="ECHO VR TEXTURE EDITOR", 
+                              font=('Arial', 14, 'bold'), 
+                              fg=self.colors['accent_blue'],
+                              bg=self.colors['bg_dark'])
+        title_label.grid(row=0, column=1, sticky='w')
+        
+        self.output_folder_button = tk.Button(header_frame, text="Select Output Folder", 
+                                            command=self.select_output_folder,
+                                            bg=self.colors['accent_blue'],
+                                            fg=self.colors['text_light'],
+                                            font=('Arial', 9, 'bold'))
+        self.output_folder_button.grid(row=0, column=2, sticky='e', padx=5)
+        
+        self.input_folder_button = tk.Button(header_frame, text="Select Input Folder", 
+                                           command=self.select_input_folder,
+                                           bg=self.colors['accent_purple'],
+                                           fg=self.colors['text_light'],
+                                           font=('Arial', 9, 'bold'))
+        self.input_folder_button.grid(row=0, column=3, sticky='e', padx=5)
+        
+        self.status_label = tk.Label(main_frame, text="No folders selected",
+                                   fg=self.colors['text_muted'], bg=self.colors['bg_dark'],
+                                   font=('Arial', 9))
+        self.status_label.grid(row=1, column=0, columnspan=3, sticky='ew', pady=(0, 5))
+        
+        evr_frame = ttk.LabelFrame(main_frame, text="EVR TOOLS INTEGRATION", padding=5)
+        evr_frame.grid(row=2, column=0, columnspan=3, sticky='ew', pady=(0, 5))
+        evr_frame.columnconfigure(1, weight=1)
+        
+        ttk.Label(evr_frame, text="Data Folder:").grid(row=0, column=0, sticky='w', padx=5, pady=2)
+        self.data_folder_label = ttk.Label(evr_frame, text="Not selected", foreground=self.colors['text_muted'])
+        self.data_folder_label.grid(row=0, column=1, sticky='w', padx=5, pady=2)
+        self.data_folder_button = ttk.Button(evr_frame, text="Select", command=self.select_data_folder)
+        self.data_folder_button.grid(row=0, column=2, padx=5, pady=2)
+        
+        ttk.Label(evr_frame, text="Manifest:").grid(row=1, column=0, sticky='w', padx=5, pady=2)
+        self.package_var = tk.StringVar()
+        self.package_dropdown = ttk.Combobox(evr_frame, textvariable=self.package_var, state="readonly", width=30)
+        self.package_dropdown.grid(row=1, column=1, sticky='ew', padx=5, pady=2)
+        self.package_dropdown.bind('<<ComboboxSelected>>', self.on_package_selected)
+        
+        ttk.Label(evr_frame, text="Extracted Folder:").grid(row=2, column=0, sticky='w', padx=5, pady=2)
+        self.extracted_folder_label = ttk.Label(evr_frame, text="Not selected", foreground=self.colors['text_muted'])
+        self.extracted_folder_label.grid(row=2, column=1, sticky='w', padx=5, pady=2)
+        self.extracted_folder_button = ttk.Button(evr_frame, text="Select", command=self.select_extracted_folder)
+        self.extracted_folder_button.grid(row=2, column=2, padx=5, pady=2)
+        
+        button_frame = ttk.Frame(evr_frame)
+        button_frame.grid(row=3, column=0, columnspan=3, pady=5)
+        
+        self.extract_button = ttk.Button(button_frame, text="Extract Package", 
+                                       command=self.extract_package, state=tk.DISABLED)
+        self.extract_button.pack(side=tk.LEFT, padx=5)
+        
+        self.repack_button = ttk.Button(button_frame, text="Repack Modified", 
+                                      command=self.repack_package, state=tk.DISABLED)
+        self.repack_button.pack(side=tk.LEFT, padx=5)
+        
+        # Show tool status
+        tool_status = "Tool: "
+        if self.evr_tools.tool_path:
+            tool_status += f"{os.path.basename(self.evr_tools.tool_path)} ✓"
+        else:
+            tool_status += "Not found ✗"
+            
+        self.evr_status_label = ttk.Label(evr_frame, text=tool_status, foreground=self.colors['text_muted'])
+        self.evr_status_label.grid(row=4, column=0, columnspan=3, pady=2)
+        
+        left_frame = ttk.LabelFrame(main_frame, text="AVAILABLE TEXTURES", padding=5)
+        left_frame.grid(row=3, column=0, sticky='nsew', padx=(0, 5))
+        left_frame.columnconfigure(0, weight=1)
+        left_frame.rowconfigure(1, weight=1)  # Changed to row 1 for search bar
+        
+        # Add search bar
+        search_frame = ttk.Frame(left_frame)
+        search_frame.grid(row=0, column=0, sticky='ew', pady=(0, 5))
+        
+        ttk.Label(search_frame, text="Search:").pack(side=tk.LEFT, padx=(0, 5))
+        self.search_var = tk.StringVar()
+        self.search_entry = ttk.Entry(search_frame, textvariable=self.search_var, style='Custom.TEntry')
+        self.search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+        self.search_entry.bind('<KeyRelease>', self.filter_textures)
+        
+        clear_btn = ttk.Button(search_frame, text="X", width=2, command=self.clear_search)
+        clear_btn.pack(side=tk.LEFT)
+        
+        list_frame = ttk.Frame(left_frame)
+        list_frame.grid(row=1, column=0, sticky='nsew')
+        list_frame.columnconfigure(0, weight=1)
+        list_frame.rowconfigure(0, weight=1)
+        
+        self.file_list = tk.Listbox(list_frame, height=15, 
+                                  bg=self.colors['bg_light'],
+                                  fg=self.colors['text_light'],
+                                  selectbackground=self.colors['accent_blue'])
+        
+        scrollbar = ttk.Scrollbar(list_frame, orient='vertical', command=self.file_list.yview)
+        self.file_list.configure(yscrollcommand=scrollbar.set)
+        
+        self.file_list.grid(row=0, column=0, sticky='nsew')
+        scrollbar.grid(row=0, column=1, sticky='ns')
+        self.file_list.bind('<<ListboxSelect>>', self.on_texture_selected)
+        
+        middle_frame = ttk.LabelFrame(main_frame, text="ORIGINAL TEXTURE", padding=5)
+        middle_frame.grid(row=3, column=1, sticky='nsew', padx=5)
+        middle_frame.columnconfigure(0, weight=1)
+        middle_frame.rowconfigure(0, weight=1)
+        
+        self.original_canvas = tk.Canvas(middle_frame, bg=self.colors['bg_medium'])
+        self.original_canvas.grid(row=0, column=0, sticky='nsew')
+        
+        right_frame = ttk.LabelFrame(main_frame, text="REPLACEMENT TEXTURE", padding=5)
+        right_frame.grid(row=3, column=2, sticky='nsew', padx=(5, 0))
+        right_frame.columnconfigure(0, weight=1)
+        right_frame.rowconfigure(0, weight=1)
+        
+        self.replacement_canvas = tk.Canvas(right_frame, bg=self.colors['bg_medium'])
+        self.replacement_canvas.grid(row=0, column=0, sticky='nsew')
+        self.replacement_canvas.bind("<Button-1>", self.browse_replacement_texture)
+        
+        button_frame = ttk.Frame(main_frame)
+        button_frame.grid(row=4, column=0, columnspan=3, sticky='ew', pady=(10, 0))
+        
+        self.edit_button = tk.Button(button_frame, text="Open in Editor", 
+                                   command=self.open_external_editor,
+                                   bg=self.colors['accent_blue'],
+                                   fg=self.colors['text_light'],
+                                   font=('Arial', 9, 'bold'),
+                                   state=tk.DISABLED)
+        self.edit_button.pack(side=tk.LEFT, padx=5)
+        
+        self.renderdoc_button = tk.Button(button_frame, text="Open in RenderDoc", 
+                                        command=self.open_renderdoc,
+                                        bg=self.colors['accent_purple'],
+                                        fg=self.colors['text_light'],
+                                        font=('Arial', 9, 'bold'),
+                                        state=tk.DISABLED)
+        self.renderdoc_button.pack(side=tk.LEFT, padx=5)
+        
+        self.replace_button = tk.Button(button_frame, text="Replace Texture", 
+                                      command=self.replace_texture,
+                                      bg=self.colors['accent_blue'],
+                                      fg=self.colors['text_light'],
+                                      font=('Arial', 9, 'bold'),
+                                      state=tk.DISABLED)
+        self.replace_button.pack(side=tk.LEFT, padx=5)
+        
+        # Add "Load All Textures" button
+        self.load_all_button = tk.Button(button_frame, text="Load All Textures", 
+                                       command=self.start_loading_all_textures,
+                                       bg='#4cd964',
+                                       fg=self.colors['text_light'],
+                                       font=('Arial', 9, 'bold'))
+        self.load_all_button.pack(side=tk.LEFT, padx=5)
+        
+        self.resolution_status = tk.Label(button_frame, text="",
+                                        fg=self.colors['text_muted'], bg=self.colors['bg_dark'],
+                                        font=('Arial', 9))
+        self.resolution_status.pack(side=tk.LEFT, padx=10)
+        
+        info_frame = ttk.LabelFrame(main_frame, text="TEXTURE INFORMATION", padding=5)
+        info_frame.grid(row=5, column=0, columnspan=3, sticky='nsew', pady=(10, 0))
+        info_frame.columnconfigure(0, weight=1)
+        info_frame.rowconfigure(0, weight=1)
+        
+        self.info_text = scrolledtext.ScrolledText(info_frame, height=6, wrap=tk.WORD,
+                                                 bg=self.colors['bg_light'],
+                                                 fg=self.colors['text_light'],
+                                                 font=('Arial', 9))
+        self.info_text.grid(row=0, column=0, sticky='nsew')
+        
+        main_frame.columnconfigure(0, weight=1)
+        main_frame.columnconfigure(1, weight=2)
+        main_frame.columnconfigure(2, weight=2)
+        main_frame.rowconfigure(3, weight=3)
+        main_frame.rowconfigure(5, weight=1)
+        
+        self.update_canvas_placeholder(self.original_canvas, "Select output folder to view textures")
+        self.update_canvas_placeholder(self.replacement_canvas, "Click to select replacement texture")
+        
+    def filter_textures(self, event=None):
+        """Filter the texture list based on search text"""
+        search_text = self.search_var.get().lower()
+        
+        if not search_text:
+            # Show all textures if search is empty
+            self.filtered_textures = self.all_textures.copy()
+        else:
+            # Filter textures based on search text
+            self.filtered_textures = [texture for texture in self.all_textures if search_text in texture.lower()]
+        
+        # Update the listbox
+        self.file_list.delete(0, tk.END)
+        for texture in self.filtered_textures:
+            self.file_list.insert(tk.END, texture)
+            
+        # Update status
+        self.status_label.config(text=f"Thanks for using EVR Texture Editor")
+    
+    def clear_search(self):
+        """Clear the search field and show all textures"""
+        self.search_var.set("")
+        self.filter_textures()
+        
+    def update_canvas_placeholder(self, canvas, text):
+        canvas.delete("all")
+        canvas_width = canvas.winfo_width()
+        canvas_height = canvas.winfo_height()
+        
+        if canvas_width <= 1 or canvas_height <= 1:
+            canvas_width, canvas_height = 400, 300
+            
+        canvas.create_text(canvas_width//2, canvas_height//2, 
+                          text=text, font=("Arial", 10), 
+                          fill=self.colors['text_muted'], justify=tk.CENTER)
+        
+    def select_output_folder(self):
+        path = filedialog.askdirectory(title="Select Output Folder (contains original textures)")
+        if path:
+            self.set_output_folder(path)
+            
+    def set_output_folder(self, path):
+        self.output_folder = path
+        self.textures_folder = os.path.join(path, "-4707359568332879775")
+        self.corresponding_folder = os.path.join(path, "5353709876897953952")
+        
+        if os.path.exists(self.textures_folder):
+            self.status_label.config(text=f"Output folder: {os.path.basename(path)}")
+            self.log_info(f"Output folder set: {path}")
+            self.load_textures()
+            ConfigManager.save_config(output_folder=self.output_folder)
+        else:
+            messagebox.showerror("Error", "Textures folder not found! Make sure the output folder contains:\n-4707359568332879775")
+            
+    def select_input_folder(self):
+        path = filedialog.askdirectory(title="Select Input Folder (where modified textures go)")
+        if path:
+            self.set_input_folder(path)
+            
+    def set_input_folder(self, path):
+        self.input_folder = path
+        self.status_label.config(text=f"Input folder: {os.path.basename(path)}")
+        self.log_info(f"Input folder set: {path}")
+        ConfigManager.save_config(input_folder=self.input_folder)
+            
+    def select_data_folder(self):
+        path = filedialog.askdirectory(title="Select Data Folder (contains manifests and packages)")
+        if path:
+            self.set_data_folder(path)
+    
+    def set_data_folder(self, path):
+        self.data_folder = path
+        self.data_folder_label.config(text=os.path.basename(path))
+        
+        manifests_path = os.path.join(path, "manifests")
+        packages_path = os.path.join(path, "packages")
+        
+        if not os.path.exists(manifests_path) or not os.path.exists(packages_path):
+            parent_path = os.path.dirname(path)
+            parent_manifests = os.path.join(parent_path, "manifests")
+            parent_packages = os.path.join(parent_path, "packages")
+            
+            if os.path.exists(parent_manifests) and os.path.exists(parent_packages):
+                path = parent_path
+                manifests_path = parent_manifests
+                packages_path = parent_packages
+                self.data_folder = path
+                self.data_folder_label.config(text=os.path.basename(path))
+        
+        if os.path.exists(manifests_path) and os.path.exists(packages_path):
+            self.populate_package_dropdown(manifests_path)
+            self.log_info(f"Manifests found: {manifests_path}")
+            self.log_info(f"Packages found: {packages_path}")
+        else:
+            self.log_info("Could not find manifests and packages folders")
+        
+        ConfigManager.save_config(data_folder=self.data_folder)
+        self.update_evr_buttons_state()
+    
+    def populate_package_dropdown(self, manifests_path):
+        try:
+            packages = []
+            for file_name in os.listdir(manifests_path):
+                if os.path.isfile(os.path.join(manifests_path, file_name)):
+                    packages_path = os.path.join(os.path.dirname(manifests_path), "packages")
+                    package_file = os.path.join(packages_path, file_name)
+                    package_file_0 = os.path.join(packages_path, f"{file_name}_0")
+                    
+                    if os.path.exists(package_file) or os.path.exists(package_file_0):
+                        packages.append(file_name)
+            
+            filtered_packages = [pkg for pkg in packages if pkg == "48037dc70b0ecab2"]
+            if not filtered_packages and packages:
+                filtered_packages = [packages[0]]
+            
+            self.package_dropdown['values'] = filtered_packages
+            if filtered_packages:
+                self.package_dropdown.current(0)
+                self.on_package_selected(None)
+                self.log_info(f"Found {len(packages)} packages, showing: {filtered_packages[0]}")
+            else:
+                self.log_info("No valid packages found")
+        except Exception as e:
+            self.log_info(f"Error reading manifests: {e}")
+    
+    def on_package_selected(self, event):
+        self.package_name = self.package_var.get()
+        try:
+            int(self.package_name, 16)
+            self.update_evr_buttons_state()
+        except ValueError:
+            self.extract_button.config(state=tk.DISABLED)
+            self.repack_button.config(state=tk.DISABLED)
+    
+    def select_extracted_folder(self):
+        path = filedialog.askdirectory(title="Select Extracted Folder")
+        if path:
+            self.set_extracted_folder(path)
+    
+    def set_extracted_folder(self, path):
+        self.extracted_folder = path
+        self.extracted_folder_label.config(text=os.path.basename(path))
+        self.update_evr_buttons_state()
+        ConfigManager.save_config(extracted_folder=self.extracted_folder)
+    
+    def update_evr_buttons_state(self):
+        if self.data_folder and self.package_name and self.extracted_folder:
+            self.extract_button.config(state=tk.NORMAL)
+            
+            if os.path.exists(self.extracted_folder) and any(os.listdir(self.extracted_folder)):
+                self.repack_button.config(state=tk.NORMAL)
+            else:
+                self.repack_button.config(state=tk.DISABLED)
+        else:
+            self.extract_button.config(state=tk.DISABLED)
+            self.repack_button.config(state=tk.DISABLED)
+    
+    def extract_package(self):
+        if not all([self.data_folder, self.package_name, self.extracted_folder]):
+            messagebox.showerror("Error", "Please select data folder, package, and extraction folder first.")
+            return
+        
+        os.makedirs(self.extracted_folder, exist_ok=True)
+        
+        self.evr_status_label.config(text="Extracting package...", foreground=self.colors['accent_blue'])
+        self.root.update_idletasks()
+        
+        def extraction_thread():
+            success, message = self.evr_tools.extract_package(
+                self.data_folder, 
+                self.package_name, 
+                self.extracted_folder
+            )
+            
+            self.root.after(0, lambda: self.on_extraction_complete(success, message))
+        
+        threading.Thread(target=extraction_thread, daemon=True).start()
+    
+    def on_extraction_complete(self, success, message):
+        if success:
+            self.evr_status_label.config(text="Extraction successful!", foreground=self.colors['success'])
+            self.log_info(f"✓ EXTRACTION: {message}")
+            
+            # Try to find the extracted textures folder
+            extracted_textures_path = self.find_extracted_textures(self.extracted_folder)
+            
+            if extracted_textures_path:
+                self.set_output_folder(extracted_textures_path)
+            else:
+                self.set_output_folder(self.extracted_folder)
+            
+            self.repack_button.config(state=tk.NORMAL)
+        else:
+            self.evr_status_label.config(text="Extraction failed", foreground=self.colors['error'])
+            self.log_info(f"✗ EXTRACTION FAILED: {message}")
+            messagebox.showerror("Extraction Error", message)
+    
+    def find_extracted_textures(self, base_dir):
+        texture_patterns = [
+            os.path.join(base_dir, "**", "-4707359568332879775"),
+            os.path.join(base_dir, "**", "textures"),
+        ]
+        
+        for pattern in texture_patterns:
+            for path in glob.glob(pattern, recursive=True):
+                if os.path.isdir(path):
+                    return os.path.dirname(path)  # Return the parent directory
+        
+        return None
+    
+    def repack_package(self):
+        if not all([self.data_folder, self.package_name, self.extracted_folder, self.input_folder]):
+            messagebox.showerror("Error", "Please select data folder, package, extraction folder, and input folder first.")
+            return
+        
+        output_dir = filedialog.askdirectory(title="Select Output Directory for Repacked Package")
+        if not output_dir:
+            return
+        
+        self.evr_status_label.config(text="Repacking package...", foreground=self.colors['accent_blue'])
+        self.root.update_idletasks()
+        
+        def repacking_thread():
+            success, message = self.evr_tools.repack_package(
+                output_dir, 
+                self.package_name, 
+                self.data_folder, 
+                self.input_folder  # Using input_folder as modifiedFolder
+            )
+            
+            self.root.after(0, lambda: self.on_repacking_complete(success, message, output_dir))
+        
+        threading.Thread(target=repacking_thread, daemon=True).start()
+    
+    def on_repacking_complete(self, success, message, output_dir):
+        if success:
+            self.evr_status_label.config(text="Repacking successful!", foreground=self.colors['success'])
+            self.log_info(f"✓ REPACKING: {message}")
+            
+            # Just log where the files are, don't move them
+            packages_path = os.path.join(output_dir, "packages")
+            manifests_path = os.path.join(output_dir, "manifests")
+            
+            if os.path.exists(packages_path) and os.path.exists(manifests_path):
+                self.log_info(f"✓ Packages and manifests created in: {output_dir}")
+            else:
+                self.log_info("⚠ Packages or manifests folders not found in output directory")
+            
+        else:
+            self.evr_status_label.config(text="Repacking failed", foreground=self.colors['error'])
+            self.log_info(f"✗ REPACKING FAILED: {message}")
+        
+        messagebox.showinfo("Repacking Result", message)
+    
+    def move_repacked_files(self, output_dir):
+        """Move the repacked packages and manifests folders to their final location"""
+        try:
+            # Look for packages and manifests folders in the output directory
+            packages_src = os.path.join(output_dir, "packages")
+            manifests_src = os.path.join(output_dir, "manifests")
+            
+            if os.path.exists(packages_src) and os.path.exists(manifests_src):
+                # Create the final destination directory if it doesn't exist
+                final_dest = self.extracted_folder
+                os.makedirs(final_dest, exist_ok=True)
+                
+                # Move packages folder
+                packages_dest = os.path.join(final_dest, "packages")
+                if os.path.exists(packages_dest):
+                    shutil.rmtree(packages_dest)
+                shutil.move(packages_src, final_dest)
+                
+                # Move manifests folder
+                manifests_dest = os.path.join(final_dest, "manifests")
+                if os.path.exists(manifests_dest):
+                    shutil.rmtree(manifests_dest)
+                shutil.move(manifests_src, final_dest)
+                
+                self.log_info(f"✓ Moved repacked files to: {final_dest}")
+            else:
+                self.log_info("⚠ Packages or manifests folders not found in output directory")
+                
+        except Exception as e:
+            self.log_info(f"✗ Error moving repacked files: {e}")
+    
+    def load_textures(self):
+        self.file_list.delete(0, tk.END)
+        self.file_list.insert(tk.END, "Loading textures...")
+        self.update_canvas_placeholder(self.original_canvas, "Loading textures...")
+        self.root.update_idletasks()
+        
+        try:
+            texture_count = 0
+            dds_files = []
+            
+            if not os.path.exists(self.textures_folder):
+                self.log_info("Textures folder not found!")
+                return
+                
+            for file_name in os.listdir(self.textures_folder):
+                file_path = os.path.join(self.textures_folder, file_name)
+                if os.path.isfile(file_path):
+                    try:
+                        with open(file_path, 'rb') as f:
+                            signature = f.read(4)
+                            if signature == b'DDS ':
+                                dds_files.append(file_name)
+                                texture_count += 1
+                    except:
+                        if file_name.lower().endswith('.dds'):
+                            dds_files.append(file_name)
+                            texture_count += 1
+                            continue
+            
+            # Store all textures for search functionality
+            self.all_textures = sorted(dds_files)
+            self.filtered_textures = self.all_textures.copy()
+            
+            self.file_list.delete(0, tk.END)
+            for file_name in self.filtered_textures:
+                self.file_list.insert(tk.END, file_name)
+                
+            self.status_label.config(text=f"Found {texture_count} DDS texture files")
+            self.log_info(f"Found {texture_count} DDS texture files")
+            
+            if texture_count == 0:
+                self.log_info("No DDS files found.")
+                self.update_canvas_placeholder(self.original_canvas, "No textures found")
+            else:
+                self.update_canvas_placeholder(self.original_canvas, "Select a texture to view")
+                
+        except Exception as e:
+            self.log_info(f"Error loading textures: {e}")
+            self.update_canvas_placeholder(self.original_canvas, "Error loading textures")
+                
+    def on_texture_selected(self, event):
+        if not self.file_list.curselection():
+            return
+            
+        index = self.file_list.curselection()[0]
+        texture_name = self.filtered_textures[index]
+        self.current_texture = os.path.join(self.textures_folder, texture_name)
+        
+        try:
+            self.update_canvas_placeholder(self.original_canvas, "Loading texture...")
+            self.root.update_idletasks()
+            
+            # Load texture in a separate thread to prevent UI freezing
+            def load_texture_thread():
+                try:
+                    image = self.load_dds(self.current_texture)
+                    self.root.after(0, lambda: self.display_texture_result(image))
+                except Exception as e:
+                    self.root.after(0, lambda: self.display_texture_error(e))
+            
+            threading.Thread(target=load_texture_thread, daemon=True).start()
+            
+        except Exception as e:
+            self.log_info(f"Error loading texture: {e}")
+            self.update_canvas_placeholder(self.original_canvas, "Error loading texture")
+    
+    def display_texture_result(self, image):
+        if image:
+            self.display_image_on_canvas(image, self.original_canvas)
+            self.original_info = DDSHandler.get_dds_info(self.current_texture)
+            self.update_texture_info()
+            self.edit_button.config(state=tk.NORMAL, bg=self.colors['accent_blue'])
+            self.renderdoc_button.config(state=tk.NORMAL, bg=self.colors['accent_purple'])
+            self.replace_button.config(state=tk.NORMAL, bg=self.colors['accent_blue'])
+        else:
+            self.update_canvas_placeholder(self.original_canvas, "Failed to load texture")
+            self.edit_button.config(state=tk.DISABLED, bg='#666666')
+            self.renderdoc_button.config(state=tk.DISABLED, bg='#666666')
+            self.replace_button.config(state=tk.DISABLED, bg='#666666')
+    
+    def display_texture_error(self, error):
+        self.log_info(f"Error loading texture: {error}")
+        self.update_canvas_placeholder(self.original_canvas, "Error loading texture")
+        self.edit_button.config(state=tk.DISABLED, bg='#666666')
+        self.renderdoc_button.config(state=tk.DISABLED, bg='#666666')
+        self.replace_button.config(state=tk.DISABLED, bg='#666666')
+            
+    def browse_replacement_texture(self, event):
+        if not self.current_texture:
+            messagebox.showinfo("Info", "Please select an original texture first")
+            return
+            
+        file_path = filedialog.askopenfilename(
+            title="Select Replacement Texture",
+            filetypes=[("DDS files", "*.dds"), ("All files", "*.*")]
+        )
+        
+        if file_path:
+            self.replacement_texture = file_path
+            try:
+                # Load replacement texture in a separate thread
+                def load_replacement_thread():
+                    try:
+                        image = self.load_dds(file_path)
+                        self.root.after(0, lambda: self.display_replacement_result(image, file_path))
+                    except Exception as e:
+                        self.root.after(0, lambda: self.display_replacement_error(e))
+                
+                threading.Thread(target=load_replacement_thread, daemon=True).start()
+                
+            except Exception as e:
+                self.log_info(f"Error loading replacement texture: {e}")
+                self.update_canvas_placeholder(self.replacement_canvas, "Error loading replacement")
+    
+    def display_replacement_result(self, image, file_path):
+        if image:
+            self.display_image_on_canvas(image, self.replacement_canvas)
+            self.replacement_info = DDSHandler.get_dds_info(file_path)
+            self.replacement_size = self.replacement_info['file_size']
+            self.update_texture_info()
+            self.check_resolution_match()
+            self.log_info(f"Replacement loaded: {os.path.basename(file_path)}")
+            self.log_info(f"Replacement size: {self.replacement_size} bytes")
+        else:
+            self.update_canvas_placeholder(self.replacement_canvas, "Failed to load replacement")
+    
+    def display_replacement_error(self, error):
+        self.log_info(f"Error loading replacement texture: {error}")
+        self.update_canvas_placeholder(self.replacement_canvas, "Error loading replacement")
+    
+    def load_dds(self, file_path):
+        """Load DDS file and ensure it's cached with original name"""
+        cache_path = TextureLoader.get_cache_path(file_path)
+        
+        # If cached version exists, use it
+        if os.path.exists(cache_path):
+            try:
+                return Image.open(cache_path).convert("RGBA")
+            except Exception as e:
+                print(f"Failed to load cached texture: {e}")
+                try:
+                    os.remove(cache_path)
+                except:
+                    pass
+        
+        # Otherwise load and cache it
+        image = TextureLoader.load_texture(file_path)
+        if image:
+            try:
+                image.save(cache_path)
+            except Exception as e:
+                print(f"Failed to cache texture: {e}")
+        
+        return image
             
     def display_image_on_canvas(self, image, canvas):
         canvas.delete("all")
@@ -1616,6 +2422,82 @@ class EchoVRTextureViewer:
         else:
             messagebox.showerror("Error", "Could not determine replacement file size")
             self.log_info("✗ Could not determine replacement file size")
+            
+    def start_loading_all_textures(self):
+        """Start loading all textures in batches"""
+        if not self.textures_folder or not os.path.exists(self.textures_folder):
+            messagebox.showerror("Error", "No textures folder selected")
+            return
+            
+        if self.is_loading_all:
+            self.is_loading_all = False
+            self.load_all_button.config(text="Load All Textures", bg='#4cd964')
+            self.log_info("Stopped loading textures")
+            return
+            
+        # Get all texture files
+        self.textures_to_load = []
+        for file_name in os.listdir(self.textures_folder):
+            file_path = os.path.join(self.textures_folder, file_name)
+            if os.path.isfile(file_path):
+                try:
+                    with open(file_path, 'rb') as f:
+                        signature = f.read(4)
+                        if signature == b'DDS ':
+                            self.textures_to_load.append(file_name)
+                except:
+                    if file_name.lower().endswith('.dds'):
+                        self.textures_to_load.append(file_name)
+        
+        if not self.textures_to_load:
+            self.log_info("No DDS textures found to load")
+            return
+            
+        self.is_loading_all = True
+        self.current_batch_index = 0
+        self.load_all_button.config(text="Stop Loading", bg='#ff6b6b')
+        self.log_info(f"Starting to load {len(self.textures_to_load)} textures in batches of 30")
+        
+        # Start loading the first batch
+        self.load_next_batch()
+
+    def load_next_batch(self):
+        """Load the next batch of textures"""
+        if not self.is_loading_all or self.current_batch_index >= len(self.textures_to_load):
+            self.is_loading_all = False
+            self.load_all_button.config(text="Load All Textures", bg='#4cd964')
+            self.log_info("Finished loading all textures")
+            return
+            
+        # Load up to 30 textures in this batch
+        batch_size = min(30, len(self.textures_to_load) - self.current_batch_index)
+        batch_textures = self.textures_to_load[self.current_batch_index:self.current_batch_index + batch_size]
+        
+        self.log_info(f"Loading batch {self.current_batch_index//30 + 1}: {batch_size} textures")
+        
+        # Load each texture in the batch
+        for texture_name in batch_textures:
+            texture_path = os.path.join(self.textures_folder, texture_name)
+            
+            # Load texture in a separate thread
+            def load_texture_thread(texture_path=texture_path):
+                try:
+                    image = self.load_dds(texture_path)
+                    # We don't need to display them, just cache them
+                    if image:
+                        cache_path = TextureLoader.get_cache_path(texture_path)
+                        try:
+                            image.save(cache_path)
+                        except Exception as e:
+                            print(f"Failed to cache texture: {e}")
+                except Exception as e:
+                    print(f"Error loading texture {texture_path}: {e}")
+            
+            threading.Thread(target=load_texture_thread, daemon=True).start()
+        
+        # Schedule the next batch after a delay to allow current batch to process
+        self.current_batch_index += batch_size
+        self.root.after(5000, self.load_next_batch)  # Wait 5 seconds before next batch
             
     def log_info(self, message):
         self.info_text.insert(tk.END, message + "\n")
