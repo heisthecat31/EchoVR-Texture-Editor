@@ -13,23 +13,25 @@ import time
 import hashlib
 import ctypes
 
+# Check and install required dependencies
 try:
-    from PIL import Image, ImageTk, ImageDraw 
+    from PIL import Image, ImageTk, ImageDraw  # type: ignore
     HAS_PIL = True
 except ImportError:
     HAS_PIL = False
     print("Pillow library not found. Please install it with: pip install Pillow")
 
 try:
-    import imageio.v3 as iio
+    import imageio.v3 as iio # type: ignore
     HAS_IMAGEIO = True
 except ImportError:
     HAS_IMAGEIO = False
     print("imageio not available - using fallback DDS loading")
 
+# If PIL is not available, show error and offer to install
 if not HAS_PIL:
     root = tk.Tk()
-    root.withdraw() 
+    root.withdraw()  # Hide the main window
     
     result = messagebox.askyesno(
         "Missing Dependencies", 
@@ -40,6 +42,7 @@ if not HAS_PIL:
     
     if result:
         try:
+            # Try to install Pillow
             subprocess.check_call([sys.executable, "-m", "pip", "install", "Pillow"])
             messagebox.showinfo(
                 "Installation Complete", 
@@ -724,9 +727,6 @@ class EchoVRTextureViewer:
         # Auto-set data folder to Echo VR location
         self.auto_find_echo_vr_data()
         
-        # Auto-set output folder to extracted folder
-        self.set_output_folder(self.extracted_folder)
-        
     def auto_setup_folders(self):
         """Automatically set up the required folders"""
         script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -1035,7 +1035,6 @@ class EchoVRTextureViewer:
         self.log_info("✓ Auto-setup complete")
         self.log_info(f"  - Extracted: {self.extracted_folder}")
         self.log_info(f"  - Input: {self.input_folder}")
-        self.log_info(f"  - Output: {self.output_folder}")
         self.log_info(f"  - New Data: {self.newdatafolder}")
         
     def filter_textures(self, event=None):
