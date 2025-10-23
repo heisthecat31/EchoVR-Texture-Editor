@@ -1,4 +1,4 @@
-Welcome to EchoVR texture editor, it took effort making this sadly when it was meant to take only a day.
+Welcome to EchoVR texture editor, it took effort making this sadly when it was meant to take only a day. 
 
 This program can be opened as python script or through the .exe, DO NOT OPEN echoModifyFiles.exe as it is only there to be used by the editor program and do not close the cmd which opens when extracting(cmd only shows when using the .exe version).
 When opening the app it can take up to 3 minutes to load each time whilst it loads the texture files, it will also take a long time for the extraction and repacking process of the code to complete, luckily extraction is something you only have to do once, on starting the app select the data folder and the extraction folder, after it is extracted you can then select the output folder and set it as the same directory as the extraction folder, this is where the texture files will be pulled from, then input folder will be any folder you want it to be, but there will be an input folder provided which you can select.
@@ -17,3 +17,5 @@ https://github.com/goopsie/evrFileTools
 
 
 IMPORTANT --> when making your dds textures do not use a converter, instead use a photo editor and export as dds, a free online tool is https://www.photopea.com, "drag and drop, edit it then export -> more -> dds" here you can lock the resolution and change it also.
+
+https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170#latest-supported-redistributable-version - THIS IS REQUIRED TO MAKE TEXCONV.EXE WORK.
