@@ -19,3 +19,5 @@ https://github.com/goopsie/evrFileTools
 IMPORTANT --> when making your dds textures do not use a converter, instead use a photo editor and export as dds, a free online tool is https://www.photopea.com, "drag and drop, edit it then export -> more -> dds" here you can lock the resolution and change it also.
 
 https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170#latest-supported-redistributable-version - THIS IS REQUIRED TO MAKE TEXCONV.EXE WORK.
+
+This now works with quest standalone, download quest data from https://mia.cdn.echo.taxi/_data.zip.
