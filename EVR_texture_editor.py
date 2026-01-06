@@ -10,29 +10,65 @@ import threading
 import json
 import glob
 import time
-import hashlib
-import ctypes
 import zipfile
 import urllib.request
 from pathlib import Path
 
-# Try to import PIL, if not available, show error
 try:
     from PIL import Image, ImageTk, ImageDraw, ImageFont
     HAS_PIL = True
 except ImportError:
     HAS_PIL = False
-    messagebox.showerror("Missing Dependencies", 
-                        "Pillow library is required but not installed.\nPlease install it manually: pip install Pillow")
+    messagebox.showerror("Missing Dependencies", "Pillow library is required but not installed.\nPlease install it manually: pip install Pillow")
     sys.exit(1)
 
 CONFIG_FILE = "config.json"
 CACHE_DIR = "texture_cache"
 DECODE_CACHE = {}
 
+def run_hidden_command(cmd, cwd=None, timeout=None, capture_output=True):
+    if sys.platform == 'win32':
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = subprocess.SW_HIDE
+        
+        if capture_output:
+            try:
+                result = subprocess.run(
+                    cmd, 
+                    startupinfo=startupinfo,
+                    capture_output=True, 
+                    text=True, 
+                    cwd=cwd,
+                    timeout=timeout,
+                    creationflags=subprocess.CREATE_NO_WINDOW
+                )
+                return result
+            except subprocess.TimeoutExpired:
+                return subprocess.CompletedProcess(cmd, -1, "", "Timeout expired")
+            except Exception:
+                return subprocess.CompletedProcess(cmd, -1, "", "Command failed")
+        else:
+            try:
+                result = subprocess.run(
+                    cmd, 
+                    startupinfo=startupinfo,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    cwd=cwd,
+                    timeout=timeout,
+                    creationflags=subprocess.CREATE_NO_WINDOW
+                )
+                return result
+            except:
+                return subprocess.CompletedProcess(cmd, -1)
+    else:
+        if capture_output:
+            return subprocess.run(cmd, capture_output=True, text=True, cwd=cwd, timeout=timeout)
+        else:
+            return subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, cwd=cwd, timeout=timeout)
+
 class ConfigManager:
-    """Configuration management"""
-    
     @staticmethod
     def load_config():
         script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -40,7 +76,7 @@ class ConfigManager:
             'output_folder': None,
             'data_folder': None,
             'extracted_folder': None,
-            'repacked_folder': os.path.join(script_dir, "output-both"),  # Default to output-both
+            'repacked_folder': os.path.join(script_dir, "output-both"),
             'pcvr_input_folder': os.path.join(script_dir, "input-pcvr"),
             'quest_input_folder': os.path.join(script_dir, "input-quest"),
             'backup_folder': None,
@@ -51,14 +87,11 @@ class ConfigManager:
             if os.path.exists(CONFIG_FILE):
                 with open(CONFIG_FILE, 'r') as f:
                     loaded_config = json.load(f)
-                    # Merge loaded config with defaults
                     for key in default_config:
                         if key in loaded_config:
                             value = loaded_config[key]
-                            # Handle null values from JSON
                             if value is None:
-                                continue  # Keep the default
-                            # Normalize path to handle mixed slashes
+                                continue
                             if isinstance(value, str) and (key.endswith('_folder') or key.endswith('_path')):
                                 value = os.path.normpath(value)
                             default_config[key] = value
@@ -79,23 +112,18 @@ class ConfigManager:
             print(f"Config save error: {e}")
 
 class TutorialPopup:
-    """Tutorial popup window"""
-    
     @staticmethod
     def show(parent):
         popup = tk.Toplevel(parent)
         popup.title("EchoVR Texture Editor - Tutorial")
         popup.geometry("800x600")
-        # Changed to a distinct Grey
         bg_color = '#333333' 
         popup.configure(bg=bg_color)
         popup.resizable(True, True)
         
-        # Make popup modal
         popup.transient(parent)
         popup.grab_set()
         
-        # Center the popup
         popup.update_idletasks()
         try:
             x = parent.winfo_x() + (parent.winfo_width() - popup.winfo_reqwidth()) // 2
@@ -104,33 +132,24 @@ class TutorialPopup:
         except:
             pass
         
-        # Create a canvas for scrollable content
         canvas = tk.Canvas(popup, bg=bg_color, highlightthickness=0)
         scrollbar = ttk.Scrollbar(popup, orient="vertical", command=canvas.yview)
         scrollable_frame = ttk.Frame(canvas)
         
-        scrollable_frame.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
+        scrollable_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
         
         canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
         
-        # Content
         content = scrollable_frame
         
-        # Style for content to match grey background
         style = ttk.Style()
         style.configure("Grey.TFrame", background=bg_color)
         scrollable_frame.configure(style="Grey.TFrame")
         
-        # Title
-        title = tk.Label(content, text="📚 EchoVR Texture Editor Tutorial", 
-                        font=("Arial", 16, "bold"), fg="#ffffff", bg=bg_color)
+        title = tk.Label(content, text="📚 EchoVR Texture Editor Tutorial", font=("Arial", 16, "bold"), fg="#ffffff", bg=bg_color)
         title.pack(pady=20)
         
-        # Sections
         sections = [
             {
                 "title": "🎯 Getting Started",
@@ -184,46 +203,30 @@ class TutorialPopup:
             }
         ]
         
-        # Add sections
         for section in sections:
-            # Lighter grey for sections to stand out against the grey background
             section_bg = '#444444'
             frame = tk.Frame(content, bg=section_bg, relief=tk.RAISED, bd=1)
             frame.pack(fill=tk.X, padx=20, pady=10)
             
-            title_label = tk.Label(frame, text=section["title"], 
-                                  font=("Arial", 12, "bold"), 
-                                  fg="#4cd964", bg=section_bg, anchor="w")
+            title_label = tk.Label(frame, text=section["title"], font=("Arial", 12, "bold"), fg="#4cd964", bg=section_bg, anchor="w")
             title_label.pack(fill=tk.X, padx=10, pady=(10, 5))
             
-            content_label = tk.Label(frame, text=section["content"], 
-                                    font=("Arial", 10), 
-                                    fg="#eeeeee", bg=section_bg, 
-                                    justify=tk.LEFT, anchor="w", wraplength=700)
+            content_label = tk.Label(frame, text=section["content"], font=("Arial", 10), fg="#eeeeee", bg=section_bg, justify=tk.LEFT, anchor="w", wraplength=700)
             content_label.pack(fill=tk.X, padx=10, pady=(0, 10))
         
-        # Mouse wheel scrolling with error handling and unbinding
         def _on_mousewheel(event):
             try:
                 canvas.yview_scroll(int(-1*(event.delta/120)), "units")
             except Exception:
-                pass # Ignore errors if canvas is destroyed
+                pass
         
-        # Clean up binding when window closes
         def on_close():
             canvas.unbind_all("<MouseWheel>")
             popup.destroy()
             
-        # Close button
-        close_btn = tk.Button(content, text="Close Tutorial", 
-                             command=on_close,
-                             bg='#4a4a4a', fg='#ffffff',
-                             font=("Arial", 10, "bold"),
-                             relief=tk.RAISED, bd=2,
-                             padx=20, pady=10)
+        close_btn = tk.Button(content, text="Close Tutorial", command=on_close, bg='#4a4a4a', fg='#ffffff', font=("Arial", 10, "bold"), relief=tk.RAISED, bd=2, padx=20, pady=10)
         close_btn.pack(pady=20)
         
-        # Pack canvas and scrollbar
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
         
@@ -231,146 +234,92 @@ class TutorialPopup:
         popup.protocol("WM_DELETE_WINDOW", on_close)
 
 class UpdateEchoPopup:
-    """Update EchoVR game files popup"""
-    
     def __init__(self, parent, config):
         self.parent = parent
         self.config = config
         self.backup_location = None
         
-        # Create popup
         self.popup = tk.Toplevel(parent)
         self.popup.title("⚠ Update EchoVR Game Files")
         self.popup.geometry("850x500")
         self.popup.configure(bg='#1a1a1a')
         self.popup.resizable(False, False)
         
-        # Make popup modal
         self.popup.transient(parent)
         self.popup.grab_set()
         
-        # Center the popup
         self.popup.update_idletasks()
         x = parent.winfo_x() + (parent.winfo_width() - self.popup.winfo_reqwidth()) // 2
         y = parent.winfo_y() + (parent.winfo_height() - self.popup.winfo_reqheight()) // 2
         self.popup.geometry(f"+{x}+{y}")
         
-        # Setup UI
         self.setup_ui()
-        
-        # Load backup status
         self.refresh_backup_status()
     
     def setup_ui(self):
-        """Setup the popup UI"""
-        # Title with warning icon
         title_frame = tk.Frame(self.popup, bg='#1a1a1a')
         title_frame.pack(fill=tk.X, padx=20, pady=20)
         
         warning_icon = "⚠️"
-        title_label = tk.Label(title_frame, text=f"{warning_icon} WARNING: Update EchoVR", 
-                              font=("Arial", 14, "bold"), fg="#ff6b6b", bg='#1a1a1a')
+        title_label = tk.Label(title_frame, text=f"{warning_icon} WARNING: Update EchoVR", font=("Arial", 14, "bold"), fg="#ff6b6b", bg='#1a1a1a')
         title_label.pack()
         
-        # Warning message
         warning_text = """This menu allows you to update your EchoVR installation.
 Always create a backup before proceeding."""
         
-        warning_label = tk.Label(self.popup, text=warning_text,
-                               font=("Arial", 11), fg="#ffffff", bg='#1a1a1a',
-                               justify=tk.CENTER, wraplength=650)
+        warning_label = tk.Label(self.popup, text=warning_text, font=("Arial", 11), fg="#ffffff", bg='#1a1a1a', justify=tk.CENTER, wraplength=650)
         warning_label.pack(padx=20, pady=10)
         
-        # Game data folder info
         data_folder = self.config.get('data_folder', 'Not selected')
         data_frame = tk.Frame(self.popup, bg='#2a2a2a', relief=tk.RAISED, bd=1)
         data_frame.pack(fill=tk.X, padx=20, pady=10)
         
-        tk.Label(data_frame, text="Game Data Folder:", 
-                font=("Arial", 10, "bold"), fg="#4cd964", bg='#2a2a2a').pack(anchor="w", padx=10, pady=(10, 0))
+        tk.Label(data_frame, text="Game Data Folder:", font=("Arial", 10, "bold"), fg="#4cd964", bg='#2a2a2a').pack(anchor="w", padx=10, pady=(10, 0))
         
-        folder_label = tk.Label(data_frame, text=data_folder,
-                              font=("Arial", 9), fg="#cccccc", bg='#2a2a2a',
-                              wraplength=620, justify=tk.LEFT)
+        folder_label = tk.Label(data_frame, text=data_folder, font=("Arial", 9), fg="#cccccc", bg='#2a2a2a', wraplength=620, justify=tk.LEFT)
         folder_label.pack(fill=tk.X, padx=10, pady=(0, 10))
         
-        # Output folder info
         script_dir = os.path.dirname(os.path.abspath(__file__))
         output_folder = self.config.get('repacked_folder', os.path.join(script_dir, "output-both"))
         output_frame = tk.Frame(self.popup, bg='#2a2a2a', relief=tk.RAISED, bd=1)
         output_frame.pack(fill=tk.X, padx=20, pady=10)
         
-        tk.Label(output_frame, text="Modified Files Source:", 
-                font=("Arial", 10, "bold"), fg="#4cd964", bg='#2a2a2a').pack(anchor="w", padx=10, pady=(10, 0))
+        tk.Label(output_frame, text="Modified Files Source:", font=("Arial", 10, "bold"), fg="#4cd964", bg='#2a2a2a').pack(anchor="w", padx=10, pady=(10, 0))
         
-        output_label = tk.Label(output_frame, text=output_folder,
-                              font=("Arial", 9), fg="#cccccc", bg='#2a2a2a',
-                              wraplength=620, justify=tk.LEFT)
+        output_label = tk.Label(output_frame, text=output_folder, font=("Arial", 9), fg="#cccccc", bg='#2a2a2a', wraplength=620, justify=tk.LEFT)
         output_label.pack(fill=tk.X, padx=10, pady=(0, 10))
         
-        # Backup section
         backup_frame = tk.Frame(self.popup, bg='#1a1a1a')
         backup_frame.pack(fill=tk.X, padx=20, pady=10)
         
-        # Buttons Frame
         btn_frame = tk.Frame(backup_frame, bg='#1a1a1a')
         btn_frame.pack(pady=10)
         
-        # 1. Create Backup
-        self.create_backup_btn = tk.Button(btn_frame, text="📁 Create Backup", 
-                                          command=self.create_backup,
-                                          bg='#4a4a4a', fg='#ffffff',
-                                          font=("Arial", 10, "bold"),
-                                          relief=tk.RAISED, bd=2,
-                                          padx=15, pady=10)
+        self.create_backup_btn = tk.Button(btn_frame, text="📁 Create Backup", command=self.create_backup, bg='#4a4a4a', fg='#ffffff', font=("Arial", 10, "bold"), relief=tk.RAISED, bd=2, padx=15, pady=10)
         self.create_backup_btn.pack(side=tk.LEFT, padx=5)
         
-        # 2. Restore Backup
-        self.restore_backup_btn = tk.Button(btn_frame, text="🔄 Restore Backup", 
-                                           command=self.restore_backup,
-                                           bg='#4a4a4a', fg='#ffffff',
-                                           font=("Arial", 10, "bold"),
-                                           relief=tk.RAISED, bd=2,
-                                           padx=15, pady=10,
-                                           state=tk.DISABLED)
+        self.restore_backup_btn = tk.Button(btn_frame, text="🔄 Restore Backup", command=self.restore_backup, bg='#4a4a4a', fg='#ffffff', font=("Arial", 10, "bold"), relief=tk.RAISED, bd=2, padx=15, pady=10, state=tk.DISABLED)
         self.restore_backup_btn.pack(side=tk.LEFT, padx=5)
 
-        # 3. Update Packages Only
-        self.update_pkg_btn = tk.Button(btn_frame, text="📦 Update Packages", 
-                                           command=self.update_packages_only,
-                                           bg='#007aff', fg='#ffffff',
-                                           font=("Arial", 10, "bold"),
-                                           relief=tk.RAISED, bd=2,
-                                           padx=15, pady=10)
+        self.update_pkg_btn = tk.Button(btn_frame, text="📦 Update Packages", command=self.update_packages_only, bg='#007aff', fg='#ffffff', font=("Arial", 10, "bold"), relief=tk.RAISED, bd=2, padx=15, pady=10)
         self.update_pkg_btn.pack(side=tk.LEFT, padx=5)
         
-        # Backup status label
-        self.backup_status = tk.Label(backup_frame, text="Checking backup status...",
-                                     font=("Arial", 9), fg="#ffcc00", bg='#1a1a1a')
+        self.backup_status = tk.Label(backup_frame, text="Checking backup status...", font=("Arial", 9), fg="#ffcc00", bg='#1a1a1a')
         self.backup_status.pack()
         
-        # Close button
         close_frame = tk.Frame(self.popup, bg='#1a1a1a')
         close_frame.pack(fill=tk.X, padx=20, pady=20)
         
-        close_btn = tk.Button(close_frame, text="Close", 
-                             command=self.popup.destroy,
-                             bg='#4a4a4a', fg='#ffffff',
-                             font=("Arial", 10, "bold"),
-                             relief=tk.RAISED, bd=2,
-                             padx=30, pady=10)
+        close_btn = tk.Button(close_frame, text="Close", command=self.popup.destroy, bg='#4a4a4a', fg='#ffffff', font=("Arial", 10, "bold"), relief=tk.RAISED, bd=2, padx=30, pady=10)
         close_btn.pack()
     
     def log_info(self, message):
-        """Log message to parent application"""
         if hasattr(self.parent, 'log_info'):
             self.parent.log_info(message)
     
     def check_backup_exists(self):
-        """Check if backup exists in config"""
         backup_folder = self.config.get('backup_folder')
         if backup_folder:
-            # Normalize the path
             backup_folder = os.path.normpath(backup_folder)
             if os.path.exists(backup_folder):
                 self.backup_location = backup_folder
@@ -378,52 +327,35 @@ Always create a backup before proceeding."""
         return False
     
     def refresh_backup_status(self):
-        """Refresh backup status display"""
         if self.check_backup_exists():
-            self.backup_status.config(
-                text=f"✓ Backup found: {os.path.basename(self.backup_location)}", 
-                fg="#4cd964"
-            )
+            self.backup_status.config(text=f"✓ Backup found: {os.path.basename(self.backup_location)}", fg="#4cd964")
             self.restore_backup_btn.config(state=tk.NORMAL)
         else:
-            self.backup_status.config(
-                text="No backup found - create one before updating", 
-                fg="#ffcc00"
-            )
+            self.backup_status.config(text="No backup found - create one before updating", fg="#ffcc00")
             self.restore_backup_btn.config(state=tk.DISABLED)
     
     def create_backup(self):
-        """Create backup of game files"""
         if not self.config.get('data_folder'):
             messagebox.showerror("Error", "Please select game data folder first")
             return
         
-        # Ask for backup location
-        backup_path = filedialog.askdirectory(
-            title="Select Backup Location",
-            initialdir=os.path.dirname(self.config['data_folder'])
-        )
+        backup_path = filedialog.askdirectory(title="Select Backup Location", initialdir=os.path.dirname(self.config['data_folder']))
         
         if not backup_path:
             return
         
         try:
-            # Create backup folder with timestamp
             timestamp = time.strftime("%Y%m%d_%H%M%S")
             backup_folder = os.path.join(backup_path, f"EchoVR_Backup_{timestamp}")
             
-            # Show progress
             self.backup_status.config(text="Creating backup...", fg="#ffcc00")
             self.popup.update_idletasks()
             
-            # Copy game data folder
             shutil.copytree(self.config['data_folder'], backup_folder)
             
-            # Save backup location to config
             ConfigManager.save_config(backup_folder=backup_folder)
             self.backup_location = backup_folder
             
-            # Update UI
             self.refresh_backup_status()
             self.log_info(f"✓ Backup created: {backup_folder}")
             
@@ -434,31 +366,22 @@ Always create a backup before proceeding."""
             self.backup_status.config(text="Backup failed", fg="#ff3b30")
     
     def restore_backup(self):
-        """Restore from backup"""
         if not self.backup_location or not os.path.exists(self.backup_location):
             messagebox.showerror("Error", "Backup not found")
             return
         
-        # Confirm restoration
-        confirm = messagebox.askyesno(
-            "Confirm Restore",
-            f"Restore game files from backup?\n\nBackup: {self.backup_location}\n\n"
-            f"This will OVERWRITE your current game files."
-        )
+        confirm = messagebox.askyesno("Confirm Restore", f"Restore game files from backup?\n\nBackup: {self.backup_location}\n\nThis will OVERWRITE your current game files.")
         
         if not confirm:
             return
         
         try:
-            # Show progress
             self.backup_status.config(text="Restoring backup...", fg="#ffcc00")
             self.popup.update_idletasks()
             
-            # Clear current game data folder
             if os.path.exists(self.config['data_folder']):
                 shutil.rmtree(self.config['data_folder'])
             
-            # Restore from backup
             shutil.copytree(self.backup_location, self.config['data_folder'])
             
             self.log_info(f"✓ Game files restored from backup: {self.backup_location}")
@@ -470,66 +393,35 @@ Always create a backup before proceeding."""
             self.backup_status.config(text="Restore failed", fg="#ff3b30")
     
     def update_packages_only(self):
-        """Update game files by moving files from output-both folder - NO AUTOMATIC BACKUP"""
         script_dir = os.path.dirname(os.path.abspath(__file__))
         
-        # Get output folder
         output_folder = self.config.get('repacked_folder')
         if not output_folder:
             output_folder = os.path.join(script_dir, "output-both")
         
-        # Get game data folder
         data_folder = self.config.get('data_folder')
         
-        # Validate paths
         if not os.path.exists(output_folder):
-            messagebox.showerror("Error", 
-                f"Output folder not found:\n{output_folder}\n\n"
-                f"Please repack your files first.")
+            messagebox.showerror("Error", f"Output folder not found:\n{output_folder}\n\nPlease repack your files first.")
             return
             
         if not data_folder or not os.path.exists(data_folder):
-            messagebox.showerror("Error", 
-                "Game data folder not found.\n"
-                "Please select your EchoVR data folder first.")
+            messagebox.showerror("Error", "Game data folder not found.\nPlease select your EchoVR data folder first.")
             return
         
-        # Check for required folders
         packages_path = os.path.join(output_folder, "packages")
         manifests_path = os.path.join(output_folder, "manifests")
         
         if not os.path.exists(packages_path) or not os.path.exists(manifests_path):
-            messagebox.showerror("Error", 
-                f"Required folders not found in:\n{output_folder}\n\n"
-                f"Please repack your files first.")
+            messagebox.showerror("Error", f"Required folders not found in:\n{output_folder}\n\nPlease repack your files first.")
             return
         
-        # Warning about no automatic backup
         if not self.backup_location:
-            warning_result = messagebox.askyesno(
-                "⚠ WARNING - No Backup Found",
-                f"No backup found! This operation will OVERWRITE your game files.\n\n"
-                f"Recommendation:\n"
-                f"1. Click 'Cancel' now\n"
-                f"2. Click 'Create Backup' first\n"
-                f"3. Then update your files\n\n"
-                f"Do you want to continue WITHOUT a backup?"
-            )
+            warning_result = messagebox.askyesno("⚠ WARNING - No Backup Found", f"No backup found! This operation will OVERWRITE your game files.\n\nRecommendation:\n1. Click 'Cancel' now\n2. Click 'Create Backup' first\n3. Then update your files\n\nDo you want to continue WITHOUT a backup?")
             if not warning_result:
                 return
         
-        # Confirm update
-        confirm = messagebox.askyesno(
-            "Update Game Files",
-            f"This will UPDATE your EchoVR installation.\n\n"
-            f"Source: {output_folder}\n"
-            f"Target: {data_folder}\n\n"
-            f"Operation:\n"
-            f"1. Move files from output-both to game folder\n"
-            f"2. Wipe output-both folder\n"
-            f"3. NO AUTOMATIC BACKUP WILL BE CREATED\n\n"
-            f"Continue?"
-        )
+        confirm = messagebox.askyesno("Update Game Files", f"This will UPDATE your EchoVR installation.\n\nSource: {output_folder}\nTarget: {data_folder}\n\nOperation:\n1. Move files from output-both to game folder\n2. Wipe output-both folder\n3. NO AUTOMATIC BACKUP WILL BE CREATED\n\nContinue?")
         
         if not confirm:
             return
@@ -537,43 +429,34 @@ Always create a backup before proceeding."""
         try:
             files_moved = 0
             
-            # Process packages and manifests folders
             for folder in ['packages', 'manifests']:
                 src_path = os.path.join(output_folder, folder)
                 dst_path = os.path.join(data_folder, folder)
                 
                 if os.path.exists(src_path):
-                    # Create destination if it doesn't exist
                     os.makedirs(dst_path, exist_ok=True)
                     
-                    # Process each file
                     for filename in os.listdir(src_path):
                         src_file = os.path.join(src_path, filename)
                         dst_file = os.path.join(dst_path, filename)
                         
                         if os.path.isfile(src_file):
-                            # Simply overwrite existing files - NO BACKUP
                             shutil.move(src_file, dst_file)
                             files_moved += 1
             
-            # Wipe output-both folder
             try:
                 for folder in ['packages', 'manifests']:
                     folder_path = os.path.join(output_folder, folder)
                     if os.path.exists(folder_path):
                         shutil.rmtree(folder_path)
                 
-                # Log success
                 self.log_info(f"✓ Moved {files_moved} files from output-both to game folder")
                 self.log_info(f"✓ Wiped output-both folder")
                 
             except Exception as wipe_error:
                 self.log_info(f"⚠ Could not completely wipe output-both: {wipe_error}")
             
-            # Show success message
-            success_msg = f"Successfully updated game files!\n\n"
-            success_msg += f"Files moved: {files_moved}\n"
-            success_msg += f"Output-both folder has been wiped clean."
+            success_msg = f"Successfully updated game files!\n\nFiles moved: {files_moved}\nOutput-both folder has been wiped clean."
             
             messagebox.showinfo("Success", success_msg)
             self.popup.destroy()
@@ -583,18 +466,14 @@ Always create a backup before proceeding."""
             messagebox.showerror("Error", error_msg)
 
 class ADBPlatformTools:
-    """ADB Platform Tools installation and management"""
-    
     @staticmethod
     def get_safe_install_directory():
-        """Get a directory where we have write permissions"""
         script_dir = os.path.dirname(os.path.abspath(__file__))
         install_dir = os.path.join(script_dir, "platform-tools")
         return install_dir
 
     @staticmethod
     def install_platform_tools():
-        """Download and install Android Platform Tools to a safe location"""
         import platform
         system = platform.system().lower()
         
@@ -649,11 +528,8 @@ class ADBPlatformTools:
             return False, f"Installation failed: {str(e)}"
 
 class ADBManager:
-    """Complete ADB management"""
-    
     @staticmethod
     def find_adb():
-        """Find ADB in safe install location or PATH"""
         safe_dir = ADBPlatformTools.get_safe_install_directory()
         local_paths = [
             os.path.join(safe_dir, "platform-tools", "adb.exe"),
@@ -675,7 +551,7 @@ class ADBManager:
                 return path
         
         try:
-            result = subprocess.run(['adb', 'version'], capture_output=True, text=True, timeout=10)
+            result = run_hidden_command(['adb', 'version'], timeout=10)
             if result.returncode == 0:
                 return 'adb'
         except:
@@ -685,26 +561,24 @@ class ADBManager:
 
     @staticmethod
     def check_adb():
-        """Check ADB and device connection"""
         adb_path = ADBManager.find_adb()
         if not adb_path:
             return False, "ADB not found", None
         
         try:
             try:
-                subprocess.run([adb_path, 'kill-server'], capture_output=True, timeout=5)
+                run_hidden_command([adb_path, 'kill-server'], timeout=5)
             except:
                 pass
             
-            result = subprocess.run([adb_path, 'devices'], capture_output=True, text=True, timeout=10)
+            result = run_hidden_command([adb_path, 'devices'], timeout=10)
             if result.returncode == 0:
                 lines = [line for line in result.stdout.strip().split('\n') if '\tdevice' in line]
                 if lines:
                     devices = []
                     for line in lines:
                         device_id = line.split('\t')[0]
-                        info_result = subprocess.run([adb_path, '-s', device_id, 'shell', 'getprop', 'ro.product.model'], 
-                                                   capture_output=True, text=True, timeout=10)
+                        info_result = run_hidden_command([adb_path, '-s', device_id, 'shell', 'getprop', 'ro.product.model'], timeout=10)
                         model = info_result.stdout.strip() if info_result.returncode == 0 else "Unknown"
                         devices.append(f"{device_id} ({model})")
                     
@@ -719,14 +593,12 @@ class ADBManager:
 
     @staticmethod
     def push_to_quest(local_folder, quest_path):
-        """Push files to Quest - pushes contents of folder, not the folder itself"""
         adb_path = ADBManager.find_adb()
         if not adb_path:
             return False, "ADB not available"
         
         try:
-            result = subprocess.run([adb_path, 'shell', 'mkdir', '-p', quest_path], 
-                                  capture_output=True, text=True, timeout=30)
+            result = run_hidden_command([adb_path, 'shell', 'mkdir', '-p', quest_path], timeout=30)
             if result.returncode != 0:
                 return False, f"Failed to create directory: {result.stderr}"
             
@@ -739,8 +611,7 @@ class ADBManager:
                 if os.path.exists(item_path):
                     total_count += 1
                     
-                    result = subprocess.run([adb_path, 'push', item_path, quest_path], 
-                                          capture_output=True, text=True, timeout=60)
+                    result = run_hidden_command([adb_path, 'push', item_path, quest_path], timeout=60)
                     
                     if result.returncode == 0:
                         success_count += 1
@@ -762,15 +633,11 @@ class ADBManager:
 
     @staticmethod
     def install_adb_tools():
-        """Install ADB tools"""
         return ADBPlatformTools.install_platform_tools()
 
 class ASTCTools:
-    """ASTC encoding/decoding for Quest textures"""
-    
     @staticmethod
     def load_texture_mapping(mapping_file):
-        """Load texture resolutions from mapping file"""
         if not mapping_file.exists():
             return {}
         
@@ -784,7 +651,6 @@ class ASTCTools:
 
     @staticmethod
     def find_texture_info(texture_name, mapping):
-        """Find texture info in mapping"""
         if texture_name in mapping:
             return mapping[texture_name]
         
@@ -799,7 +665,6 @@ class ASTCTools:
 
     @staticmethod
     def wrap_raw_astc(raw_path, wrapped_path, width, height, block_width=4, block_height=4):
-        """Add ASTC header to raw data"""
         try:
             magic = struct.pack("<I", 0x5CA1AB13)
             block_dims = struct.pack("3B", block_width, block_height, 1)
@@ -818,7 +683,6 @@ class ASTCTools:
 
     @staticmethod
     def decode_with_config(astcenc_path, raw_file, output_file, width, height, block_w, block_h, cache_key=None):
-        """Try decoding with specific config"""
         temp_astc = None
         try:
             with tempfile.NamedTemporaryFile(suffix='.astc', delete=False) as f:
@@ -827,12 +691,12 @@ class ASTCTools:
             if not ASTCTools.wrap_raw_astc(raw_file, temp_astc, width, height, block_w, block_h):
                 return False
             
-            result = subprocess.run([
+            result = run_hidden_command([
                 str(astcenc_path),
                 "-dl",
                 str(temp_astc),
                 str(output_file)
-            ], capture_output=True, text=True, timeout=10)
+            ], timeout=10)
             
             if result.returncode == 0 and output_file.exists():
                 file_size = output_file.stat().st_size
@@ -867,7 +731,6 @@ class ASTCTools:
 
     @staticmethod
     def get_common_block_sizes():
-        """Return common ASTC block sizes"""
         return [
             (4, 4), (8, 8), (6, 6), (5, 5), 
             (10, 10), (12, 12), (5, 4), (6, 5),
@@ -876,7 +739,6 @@ class ASTCTools:
 
     @staticmethod
     def decode_with_mapping(astcenc_path, texture_file, output_path, mapping):
-        """Decode using texture mapping"""
         texture_name = texture_file.stem
         texture_info = ASTCTools.find_texture_info(texture_name, mapping)
         
@@ -898,7 +760,6 @@ class ASTCTools:
 
     @staticmethod
     def brute_force_decode(astcenc_path, texture_file, output_path):
-        """Brute force decode"""
         configurations = [
             (2048, 1024, 8, 8, "2Kx1K_8x8"),
             (2048, 1024, 6, 6, "2Kx1K_6x6"),
@@ -927,14 +788,12 @@ class ASTCTools:
 
     @staticmethod
     def calculate_astc_size(width, height, block_w, block_h):
-        """Calculate expected ASTC file size"""
         blocks_x = (width + block_w - 1) // block_w
         blocks_y = (height + block_h - 1) // block_h
         return blocks_x * blocks_y * 16
 
     @staticmethod
     def pad_to_size(data, target_size):
-        """Pad data to target size"""
         current_size = len(data)
         if current_size < target_size:
             padding = b'\x00' * (target_size - current_size)
@@ -946,13 +805,12 @@ class ASTCTools:
 
     @staticmethod
     def encode_texture(astcenc_path, input_png, output_file, width, height, block_w, block_h, quality="medium", target_size=None):
-        """Encode PNG to ASTC"""
         temp_astc = None
         try:
             with tempfile.NamedTemporaryFile(suffix='.astc', delete=False) as f:
                 temp_astc = Path(f.name)
             
-            result = subprocess.run([
+            result = run_hidden_command([
                 str(astcenc_path),
                 "-cl",
                 str(input_png),
@@ -960,7 +818,7 @@ class ASTCTools:
                 f"{block_w}x{block_h}",
                 f"-{quality}",
                 "-silent"
-            ], capture_output=True, text=True, timeout=30)
+            ], timeout=30)
             
             if result.returncode != 0:
                 return False
@@ -991,7 +849,6 @@ class ASTCTools:
 
     @staticmethod
     def encode_with_cache(astcenc_path, input_png, output_file, texture_name, quality="medium"):
-        """Encode using cached config"""
         if texture_name not in DECODE_CACHE:
             return False
         
@@ -1006,7 +863,6 @@ class ASTCTools:
 
     @staticmethod
     def save_decode_cache(cache_file):
-        """Save decode cache"""
         try:
             with open(cache_file, 'w', encoding='utf-8') as f:
                 json.dump(DECODE_CACHE, f, indent=2)
@@ -1015,7 +871,6 @@ class ASTCTools:
 
     @staticmethod
     def load_decode_cache(cache_file):
-        """Load decode cache"""
         global DECODE_CACHE
         if cache_file.exists():
             try:
@@ -1025,13 +880,10 @@ class ASTCTools:
                 print(f"Cache load error: {e}")
 
 class EVRToolsManager:
-    """EVR file tools management"""
-    
     def __init__(self):
         self.tool_path = self.find_tool()
         
     def find_tool(self):
-        """Find evrFileTools.exe"""
         script_dir = os.path.dirname(os.path.abspath(__file__))
         possible_paths = [
             os.path.join(script_dir, "evrFileTools.exe"),
@@ -1045,7 +897,6 @@ class EVRToolsManager:
         return None
     
     def extract_package(self, data_dir, package_name, output_dir):
-        """Extract package"""
         if not self.tool_path:
             return False, "evrFileTools.exe not found"
         
@@ -1058,8 +909,7 @@ class EVRToolsManager:
                 "-outputDir", output_dir
             ]
             
-            result = subprocess.run(cmd, capture_output=True, text=True, 
-                                  cwd=os.path.dirname(self.tool_path), timeout=2000)
+            result = run_hidden_command(cmd, cwd=os.path.dirname(self.tool_path), timeout=2000)
             
             if result.returncode == 0:
                 return True, f"Extracted to {output_dir}"
@@ -1073,7 +923,6 @@ class EVRToolsManager:
             return False, f"Extraction error: {str(e)}"
     
     def repack_package(self, output_dir, package_name, data_dir, input_dir):
-        """Repack package"""
         if not self.tool_path:
             return False, "evrFileTools.exe not found"
         
@@ -1087,8 +936,7 @@ class EVRToolsManager:
                 "-outputDir", output_dir
             ]
             
-            result = subprocess.run(cmd, capture_output=True, text=True, 
-                                  cwd=os.path.dirname(self.tool_path), timeout=2000)
+            result = run_hidden_command(cmd, cwd=os.path.dirname(self.tool_path), timeout=2000)
             
             if result.returncode == 0:
                 return True, f"Repacked to {output_dir}"
@@ -1102,8 +950,6 @@ class EVRToolsManager:
             return False, f"Repacking error: {str(e)}"
 
 class DDSHandler:
-    """DDS file handling"""
-    
     DXGI_FORMAT = {
         0: "DXGI_FORMAT_UNKNOWN",
         71: "DXGI_FORMAT_BC1_UNORM",
@@ -1186,8 +1032,6 @@ class DDSHandler:
         return img
 
 class TextureLoader:
-    """Texture loading and caching"""
-    
     @staticmethod
     def get_cache_path(texture_path):
         script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -1398,7 +1242,7 @@ class TextureLoader:
                 cmd.extend(["-f", force_format])
             cmd.append(temp_input.name)
 
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = run_hidden_command(cmd)
 
             if result.returncode != 0:
                 return DDSHandler.create_format_preview(256, 256, "texconv error", dds_path)
@@ -1432,11 +1276,8 @@ class TextureLoader:
                 shutil.rmtree(temp_dir, ignore_errors=True)
 
 class TextureReplacer:
-    """Texture replacement functionality"""
-    
     @staticmethod
     def hex_edit_file_size(file_path, new_size):
-        """Update file size in header"""
         try:
             with open(file_path, 'r+b') as f:
                 data = bytearray(f.read())
@@ -1574,7 +1415,6 @@ class EchoVRTextureViewer:
         self.root.geometry("1400x900")
         self.root.minsize(1200, 800)
         
-        # Dark grey theme
         self.colors = {
             'bg_dark': '#0a0a0a',
             'bg_medium': '#1a1a1a',
@@ -1590,7 +1430,6 @@ class EchoVRTextureViewer:
             'error': '#ff3b30'
         }
         
-        # Configure root background
         self.root.configure(bg=self.colors['bg_dark'])
         
         self.config = ConfigManager.load_config()
@@ -1600,16 +1439,12 @@ class EchoVRTextureViewer:
         self.data_folder = self.config.get('data_folder')
         self.extracted_folder = self.config.get('extracted_folder')
         
-        # Ensure repacked_folder is never None
-        self.repacked_folder = self.config.get('repacked_folder') or os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "output-both")
+        self.repacked_folder = self.config.get('repacked_folder') or os.path.join(os.path.dirname(os.path.abspath(__file__)), "output-both")
         
         self.package_name = None
         
-        # Initialize EVR tools
         self.evr_tools = EVRToolsManager()
         
-        # Texture variables
         self.textures_folder = None
         self.corresponding_folder = None
         self.current_texture = None
@@ -1625,16 +1460,11 @@ class EchoVRTextureViewer:
         self.all_textures = []
         self.filtered_textures = []
         
-        # Download state
         self.is_downloading = False
         
-        # Setup UI
         self.setup_ui()
-        
-        # Auto-detect folders
         self.auto_detect_folders()
         
-        # Load initial data
         if self.output_folder and os.path.exists(self.output_folder):
             self.set_output_folder(self.output_folder)
         
@@ -1645,154 +1475,86 @@ class EchoVRTextureViewer:
             self.set_extracted_folder(self.extracted_folder)
     
     def auto_detect_folders(self):
-        """Auto-detect input-pcvr and input-quest folders"""
         script_dir = os.path.dirname(os.path.abspath(__file__))
         
-        # Check for input-pcvr folder
         pcvr_folder = os.path.join(script_dir, "input-pcvr")
         if os.path.exists(pcvr_folder):
             self.pcvr_input_folder = pcvr_folder
             self.log_info(f"Auto-detected PCVR input folder: {pcvr_folder}")
         
-        # Check for input-quest folder
         quest_folder = os.path.join(script_dir, "input-quest")
         if os.path.exists(quest_folder):
             self.quest_input_folder = quest_folder
             self.log_info(f"Auto-detected Quest input folder: {quest_folder}")
         
-        # Check for output-both folder
         output_both = os.path.join(script_dir, "output-both")
         if os.path.exists(output_both):
             self.repacked_folder = output_both
             self.log_info(f"Auto-detected output-both folder: {output_both}")
     
     def setup_ui(self):
-        # Configure grid
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
         
-        # Main frame
         main_frame = tk.Frame(self.root, bg=self.colors['bg_dark'])
         main_frame.grid(row=0, column=0, sticky='nsew', padx=10, pady=10)
         main_frame.columnconfigure(1, weight=1)
         main_frame.rowconfigure(4, weight=1)
         
-        # Header frame
         header_frame = tk.Frame(main_frame, bg=self.colors['bg_dark'])
         header_frame.grid(row=0, column=0, columnspan=3, sticky='ew', pady=(0, 10))
         
-        # Tutorial button (top left)
-        self.tutorial_btn = tk.Button(header_frame, text="📚 Tutorial", 
-                                     command=lambda: TutorialPopup.show(self.root),
-                                     bg=self.colors['bg_light'], fg=self.colors['text_light'],
-                                     font=("Arial", 10, "bold"),
-                                     relief=tk.RAISED, bd=2,
-                                     padx=15, pady=8)
+        self.tutorial_btn = tk.Button(header_frame, text="📚 Tutorial", command=lambda: TutorialPopup.show(self.root), bg=self.colors['bg_light'], fg=self.colors['text_light'], font=("Arial", 10, "bold"), relief=tk.RAISED, bd=2, padx=15, pady=8)
         self.tutorial_btn.pack(side=tk.LEFT, padx=(0, 10))
         
-        # Title
-        title_label = tk.Label(header_frame, text="ECHO VR TEXTURE EDITOR", 
-                              font=("Arial", 16, "bold"), 
-                              fg=self.colors['text_light'],
-                              bg=self.colors['bg_dark'])
+        title_label = tk.Label(header_frame, text="ECHO VR TEXTURE EDITOR", font=("Arial", 16, "bold"), fg=self.colors['text_light'], bg=self.colors['bg_dark'])
         title_label.pack(side=tk.LEFT, expand=True)
         
-        # Update EchoVR button
-        self.update_echo_btn = tk.Button(header_frame, text="⚠ Update EchoVR", 
-                                        command=lambda: UpdateEchoPopup(self.root, self.config),
-                                        bg=self.colors['accent_red'], fg=self.colors['text_light'],
-                                        font=("Arial", 10, "bold"),
-                                        relief=tk.RAISED, bd=2,
-                                        padx=15, pady=8)
+        self.update_echo_btn = tk.Button(header_frame, text="⚠ Update EchoVR", command=lambda: UpdateEchoPopup(self, self.config), bg=self.colors['accent_red'], fg=self.colors['text_light'], font=("Arial", 10, "bold"), relief=tk.RAISED, bd=2, padx=15, pady=8)
         self.update_echo_btn.pack(side=tk.RIGHT, padx=(10, 0))
         
-        # Status bar
-        self.status_label = tk.Label(main_frame, text="Welcome to EchoVR Texture Editor",
-                                    font=("Arial", 9),
-                                    fg=self.colors['text_muted'], bg=self.colors['bg_dark'])
+        self.status_label = tk.Label(main_frame, text="Welcome to EchoVR Texture Editor", font=("Arial", 9), fg=self.colors['text_muted'], bg=self.colors['bg_dark'])
         self.status_label.grid(row=1, column=0, columnspan=3, sticky='ew', pady=(0, 10))
         
-        # Platform indicator
-        self.platform_label = tk.Label(main_frame, text="Platform: Not detected",
-                                     font=("Arial", 10, "bold"),
-                                     fg=self.colors['warning'], bg=self.colors['bg_dark'])
+        self.platform_label = tk.Label(main_frame, text="Platform: Not detected", font=("Arial", 10, "bold"), fg=self.colors['warning'], bg=self.colors['bg_dark'])
         self.platform_label.grid(row=2, column=0, columnspan=3, sticky='ew', pady=(0, 10))
         
-        # EVR Tools frame
-        evr_frame = tk.LabelFrame(main_frame, text="EVR TOOLS INTEGRATION", 
-                                 font=("Arial", 10, "bold"),
-                                 fg=self.colors['text_light'], bg=self.colors['bg_dark'],
-                                 relief=tk.RAISED, bd=2)
+        evr_frame = tk.LabelFrame(main_frame, text="EVR TOOLS INTEGRATION", font=("Arial", 10, "bold"), fg=self.colors['text_light'], bg=self.colors['bg_dark'], relief=tk.RAISED, bd=2)
         evr_frame.grid(row=3, column=0, columnspan=3, sticky='ew', pady=(0, 10))
         evr_frame.columnconfigure(1, weight=1)
         
-        # Data folder selection
-        tk.Label(evr_frame, text="Data Folder:", 
-                font=("Arial", 9), fg=self.colors['text_light'], bg=self.colors['bg_dark']
-                ).grid(row=0, column=0, sticky='w', padx=10, pady=5)
+        tk.Label(evr_frame, text="Data Folder:", font=("Arial", 9), fg=self.colors['text_light'], bg=self.colors['bg_dark']).grid(row=0, column=0, sticky='w', padx=10, pady=5)
         
-        self.data_folder_label = tk.Label(evr_frame, text="Not selected", 
-                                         font=("Arial", 9), fg=self.colors['text_muted'], bg=self.colors['bg_dark'])
+        self.data_folder_label = tk.Label(evr_frame, text="Not selected", font=("Arial", 9), fg=self.colors['text_muted'], bg=self.colors['bg_dark'])
         self.data_folder_label.grid(row=0, column=1, sticky='w', padx=5, pady=5)
         
-        self.data_folder_btn = tk.Button(evr_frame, text="Select", 
-                                        command=self.select_data_folder,
-                                        bg=self.colors['bg_light'], fg=self.colors['text_light'],
-                                        font=("Arial", 9),
-                                        relief=tk.RAISED, bd=1,
-                                        padx=10, pady=3)
+        self.data_folder_btn = tk.Button(evr_frame, text="Select", command=self.select_data_folder, bg=self.colors['bg_light'], fg=self.colors['text_light'], font=("Arial", 9), relief=tk.RAISED, bd=1, padx=10, pady=3)
         self.data_folder_btn.grid(row=0, column=2, padx=10, pady=5)
         
-        # Package selection
-        tk.Label(evr_frame, text="Package:", 
-                font=("Arial", 9), fg=self.colors['text_light'], bg=self.colors['bg_dark']
-                ).grid(row=1, column=0, sticky='w', padx=10, pady=5)
+        tk.Label(evr_frame, text="Package:", font=("Arial", 9), fg=self.colors['text_light'], bg=self.colors['bg_dark']).grid(row=1, column=0, sticky='w', padx=10, pady=5)
         
         self.package_var = tk.StringVar()
-        self.package_dropdown = ttk.Combobox(evr_frame, textvariable=self.package_var, 
-                                            state="readonly", width=40)
+        self.package_dropdown = ttk.Combobox(evr_frame, textvariable=self.package_var, state="readonly", width=40)
         self.package_dropdown.grid(row=1, column=1, sticky='ew', padx=5, pady=5)
         self.package_dropdown.bind('<<ComboboxSelected>>', self.on_package_selected)
         
-        # Extracted folder
-        tk.Label(evr_frame, text="Extracted Folder:", 
-                font=("Arial", 9), fg=self.colors['text_light'], bg=self.colors['bg_dark']
-                ).grid(row=2, column=0, sticky='w', padx=10, pady=5)
+        tk.Label(evr_frame, text="Extracted Folder:", font=("Arial", 9), fg=self.colors['text_light'], bg=self.colors['bg_dark']).grid(row=2, column=0, sticky='w', padx=10, pady=5)
         
-        self.extracted_folder_label = tk.Label(evr_frame, text="Not selected", 
-                                              font=("Arial", 9), fg=self.colors['text_muted'], bg=self.colors['bg_dark'])
+        self.extracted_folder_label = tk.Label(evr_frame, text="Not selected", font=("Arial", 9), fg=self.colors['text_muted'], bg=self.colors['bg_dark'])
         self.extracted_folder_label.grid(row=2, column=1, sticky='w', padx=5, pady=5)
         
-        self.extracted_folder_btn = tk.Button(evr_frame, text="Select", 
-                                             command=self.select_extracted_folder,
-                                             bg=self.colors['bg_light'], fg=self.colors['text_light'],
-                                             font=("Arial", 9),
-                                             relief=tk.RAISED, bd=1,
-                                             padx=10, pady=3)
+        self.extracted_folder_btn = tk.Button(evr_frame, text="Select", command=self.select_extracted_folder, bg=self.colors['bg_light'], fg=self.colors['text_light'], font=("Arial", 9), relief=tk.RAISED, bd=1, padx=10, pady=3)
         self.extracted_folder_btn.grid(row=2, column=2, padx=10, pady=5)
         
-        # Action buttons
         button_frame = tk.Frame(evr_frame, bg=self.colors['bg_dark'])
         button_frame.grid(row=3, column=0, columnspan=3, pady=10)
         
-        self.extract_btn = tk.Button(button_frame, text="Extract Package", 
-                                    command=self.extract_package,
-                                    bg=self.colors['bg_light'], fg=self.colors['text_light'],
-                                    font=("Arial", 10, "bold"),
-                                    relief=tk.RAISED, bd=2,
-                                    padx=20, pady=8, state=tk.DISABLED)
+        self.extract_btn = tk.Button(button_frame, text="Extract Package", command=self.extract_package, bg=self.colors['bg_light'], fg=self.colors['text_light'], font=("Arial", 10, "bold"), relief=tk.RAISED, bd=2, padx=20, pady=8, state=tk.DISABLED)
         self.extract_btn.pack(side=tk.LEFT, padx=5)
         
-        self.repack_btn = tk.Button(button_frame, text="Repack Modified", 
-                                   command=self.repack_package,
-                                   bg=self.colors['bg_light'], fg=self.colors['text_light'],
-                                   font=("Arial", 10, "bold"),
-                                   relief=tk.RAISED, bd=2,
-                                   padx=20, pady=8, state=tk.DISABLED)
+        self.repack_btn = tk.Button(button_frame, text="Repack Modified", command=self.repack_package, bg=self.colors['bg_light'], fg=self.colors['text_light'], font=("Arial", 10, "bold"), relief=tk.RAISED, bd=2, padx=20, pady=8, state=tk.DISABLED)
         self.repack_btn.pack(side=tk.LEFT, padx=5)
         
-        
-        # Main content area
         content_frame = tk.Frame(main_frame, bg=self.colors['bg_dark'])
         content_frame.grid(row=4, column=0, columnspan=3, sticky='nsew')
         content_frame.columnconfigure(0, weight=1)
@@ -1800,50 +1562,30 @@ class EchoVRTextureViewer:
         content_frame.columnconfigure(2, weight=2)
         content_frame.rowconfigure(0, weight=1)
         
-        # Left panel - Texture list
-        left_frame = tk.LabelFrame(content_frame, text="AVAILABLE TEXTURES", 
-                                  font=("Arial", 10, "bold"),
-                                  fg=self.colors['text_light'], bg=self.colors['bg_dark'],
-                                  relief=tk.RAISED, bd=2)
+        left_frame = tk.LabelFrame(content_frame, text="AVAILABLE TEXTURES", font=("Arial", 10, "bold"), fg=self.colors['text_light'], bg=self.colors['bg_dark'], relief=tk.RAISED, bd=2)
         left_frame.grid(row=0, column=0, sticky='nsew', padx=(0, 5))
         left_frame.columnconfigure(0, weight=1)
         left_frame.rowconfigure(1, weight=1)
         
-        # Search box
         search_frame = tk.Frame(left_frame, bg=self.colors['bg_dark'])
         search_frame.grid(row=0, column=0, sticky='ew', padx=5, pady=5)
         
-        tk.Label(search_frame, text="Search:", 
-                font=("Arial", 9), fg=self.colors['text_light'], bg=self.colors['bg_dark']
-                ).pack(side=tk.LEFT, padx=(0, 5))
+        tk.Label(search_frame, text="Search:", font=("Arial", 9), fg=self.colors['text_light'], bg=self.colors['bg_dark']).pack(side=tk.LEFT, padx=(0, 5))
         
         self.search_var = tk.StringVar()
-        self.search_entry = tk.Entry(search_frame, textvariable=self.search_var,
-                                    bg=self.colors['bg_light'], fg=self.colors['text_light'],
-                                    font=("Arial", 9), insertbackground=self.colors['text_light'])
+        self.search_entry = tk.Entry(search_frame, textvariable=self.search_var, bg=self.colors['bg_light'], fg=self.colors['text_light'], font=("Arial", 9), insertbackground=self.colors['text_light'])
         self.search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
         self.search_entry.bind('<KeyRelease>', self.filter_textures)
         
-        clear_btn = tk.Button(search_frame, text="X", 
-                             command=self.clear_search,
-                             bg=self.colors['bg_light'], fg=self.colors['text_light'],
-                             font=("Arial", 9),
-                             relief=tk.RAISED, bd=1,
-                             width=3)
+        clear_btn = tk.Button(search_frame, text="X", command=self.clear_search, bg=self.colors['bg_light'], fg=self.colors['text_light'], font=("Arial", 9), relief=tk.RAISED, bd=1, width=3)
         clear_btn.pack(side=tk.LEFT)
         
-        # Texture listbox
         list_frame = tk.Frame(left_frame, bg=self.colors['bg_dark'])
         list_frame.grid(row=1, column=0, sticky='nsew', padx=5, pady=(0, 5))
         list_frame.columnconfigure(0, weight=1)
         list_frame.rowconfigure(0, weight=1)
         
-        self.file_list = tk.Listbox(list_frame, 
-                                   bg=self.colors['bg_light'], fg=self.colors['text_light'],
-                                   selectbackground=self.colors['accent_green'],
-                                   selectforeground=self.colors['text_light'],
-                                   font=("Arial", 9),
-                                   relief=tk.SUNKEN, bd=1)
+        self.file_list = tk.Listbox(list_frame, bg=self.colors['bg_light'], fg=self.colors['text_light'], selectbackground=self.colors['accent_green'], selectforeground=self.colors['text_light'], font=("Arial", 9), relief=tk.SUNKEN, bd=1)
         
         scrollbar = tk.Scrollbar(list_frame, bg=self.colors['bg_light'])
         self.file_list.configure(yscrollcommand=scrollbar.set)
@@ -1853,11 +1595,7 @@ class EchoVRTextureViewer:
         scrollbar.grid(row=0, column=1, sticky='ns')
         self.file_list.bind('<<ListboxSelect>>', self.on_texture_selected)
         
-        # Middle panel - Original texture
-        middle_frame = tk.LabelFrame(content_frame, text="ORIGINAL TEXTURE", 
-                                    font=("Arial", 10, "bold"),
-                                    fg=self.colors['text_light'], bg=self.colors['bg_dark'],
-                                    relief=tk.RAISED, bd=2)
+        middle_frame = tk.LabelFrame(content_frame, text="ORIGINAL TEXTURE", font=("Arial", 10, "bold"), fg=self.colors['text_light'], bg=self.colors['bg_dark'], relief=tk.RAISED, bd=2)
         middle_frame.grid(row=0, column=1, sticky='nsew', padx=5)
         middle_frame.columnconfigure(0, weight=1)
         middle_frame.rowconfigure(0, weight=1)
@@ -1865,11 +1603,7 @@ class EchoVRTextureViewer:
         self.original_canvas = tk.Canvas(middle_frame, bg=self.colors['bg_medium'])
         self.original_canvas.grid(row=0, column=0, sticky='nsew')
         
-        # Right panel - Replacement texture
-        right_frame = tk.LabelFrame(content_frame, text="REPLACEMENT TEXTURE", 
-                                   font=("Arial", 10, "bold"),
-                                   fg=self.colors['text_light'], bg=self.colors['bg_dark'],
-                                   relief=tk.RAISED, bd=2)
+        right_frame = tk.LabelFrame(content_frame, text="REPLACEMENT TEXTURE", font=("Arial", 10, "bold"), fg=self.colors['text_light'], bg=self.colors['bg_dark'], relief=tk.RAISED, bd=2)
         right_frame.grid(row=0, column=2, sticky='nsew', padx=(5, 0))
         right_frame.columnconfigure(0, weight=1)
         right_frame.rowconfigure(0, weight=1)
@@ -1878,80 +1612,41 @@ class EchoVRTextureViewer:
         self.replacement_canvas.grid(row=0, column=0, sticky='nsew')
         self.replacement_canvas.bind("<Button-1>", self.browse_replacement_texture)
         
-        # Bottom button panel
         button_panel = tk.Frame(main_frame, bg=self.colors['bg_dark'])
         button_panel.grid(row=5, column=0, columnspan=3, sticky='ew', pady=(10, 0))
         
-        # ADB buttons
         adb_frame = tk.Frame(button_panel, bg=self.colors['bg_dark'])
         adb_frame.pack(side=tk.LEFT, fill=tk.Y)
         
-        self.install_adb_btn = tk.Button(adb_frame, text="Install ADB Tools", 
-                                        command=self.install_adb_tools,
-                                        bg=self.colors['accent_orange'], fg=self.colors['text_light'],
-                                        font=("Arial", 9, "bold"),
-                                        relief=tk.RAISED, bd=2,
-                                        padx=15, pady=5)
+        self.install_adb_btn = tk.Button(adb_frame, text="Install ADB Tools", command=self.install_adb_tools, bg=self.colors['accent_orange'], fg=self.colors['text_light'], font=("Arial", 9, "bold"), relief=tk.RAISED, bd=2, padx=15, pady=5)
         self.install_adb_btn.pack(side=tk.LEFT, padx=5)
         
-        self.push_quest_btn = tk.Button(adb_frame, text="Push Files To Quest", 
-                                       command=self.push_to_quest,
-                                       bg=self.colors['accent_orange'], fg=self.colors['text_light'],
-                                       font=("Arial", 9, "bold"),
-                                       relief=tk.RAISED, bd=2,
-                                       padx=15, pady=5, state=tk.DISABLED)
+        self.push_quest_btn = tk.Button(adb_frame, text="Push Files To Quest", command=self.push_to_quest, bg=self.colors['accent_orange'], fg=self.colors['text_light'], font=("Arial", 9, "bold"), relief=tk.RAISED, bd=2, padx=15, pady=5, state=tk.DISABLED)
         self.push_quest_btn.pack(side=tk.LEFT, padx=5)
         
-        # Texture action buttons
         action_frame = tk.Frame(button_panel, bg=self.colors['bg_dark'])
         action_frame.pack(side=tk.RIGHT, fill=tk.Y)
         
-        self.edit_btn = tk.Button(action_frame, text="Open in Editor", 
-                                 command=self.open_external_editor,
-                                 bg=self.colors['bg_light'], fg=self.colors['text_light'],
-                                 font=("Arial", 9, "bold"),
-                                 relief=tk.RAISED, bd=2,
-                                 padx=15, pady=5, state=tk.DISABLED)
+        self.edit_btn = tk.Button(action_frame, text="Open in Editor", command=self.open_external_editor, bg=self.colors['bg_light'], fg=self.colors['text_light'], font=("Arial", 9, "bold"), relief=tk.RAISED, bd=2, padx=15, pady=5, state=tk.DISABLED)
         self.edit_btn.pack(side=tk.LEFT, padx=5)
         
-        self.replace_btn = tk.Button(action_frame, text="Replace Texture", 
-                                    command=self.replace_texture,
-                                    bg=self.colors['accent_green'], fg=self.colors['text_light'],
-                                    font=("Arial", 9, "bold"),
-                                    relief=tk.RAISED, bd=2,
-                                    padx=15, pady=5, state=tk.DISABLED)
+        self.replace_btn = tk.Button(action_frame, text="Replace Texture", command=self.replace_texture, bg=self.colors['accent_green'], fg=self.colors['text_light'], font=("Arial", 9, "bold"), relief=tk.RAISED, bd=2, padx=15, pady=5, state=tk.DISABLED)
         self.replace_btn.pack(side=tk.LEFT, padx=5)
         
-        self.download_btn = tk.Button(action_frame, text="Download All Textures", 
-                                     command=self.download_textures,
-                                     bg=self.colors['accent_blue'], fg=self.colors['text_light'],
-                                     font=("Arial", 9, "bold"),
-                                     relief=tk.RAISED, bd=2,
-                                     padx=15, pady=5)
+        self.download_btn = tk.Button(action_frame, text="Download All Textures", command=self.download_textures, bg=self.colors['accent_blue'], fg=self.colors['text_light'], font=("Arial", 9, "bold"), relief=tk.RAISED, bd=2, padx=15, pady=5)
         self.download_btn.pack(side=tk.LEFT, padx=5)
         
-        # Resolution status
-        self.resolution_status = tk.Label(button_panel, text="",
-                                         font=("Arial", 9),
-                                         fg=self.colors['text_muted'], bg=self.colors['bg_dark'])
+        self.resolution_status = tk.Label(button_panel, text="", font=("Arial", 9), fg=self.colors['text_muted'], bg=self.colors['bg_dark'])
         self.resolution_status.pack(side=tk.LEFT, padx=20)
         
-        # Info panel
-        info_frame = tk.LabelFrame(main_frame, text="TEXTURE INFORMATION", 
-                                  font=("Arial", 10, "bold"),
-                                  fg=self.colors['text_light'], bg=self.colors['bg_dark'],
-                                  relief=tk.RAISED, bd=2)
+        info_frame = tk.LabelFrame(main_frame, text="TEXTURE INFORMATION", font=("Arial", 10, "bold"), fg=self.colors['text_light'], bg=self.colors['bg_dark'], relief=tk.RAISED, bd=2)
         info_frame.grid(row=6, column=0, columnspan=3, sticky='nsew', pady=(10, 0))
         info_frame.columnconfigure(0, weight=1)
         info_frame.rowconfigure(0, weight=1)
         
-        self.info_text = scrolledtext.ScrolledText(info_frame, height=6, wrap=tk.WORD,
-                                                  bg=self.colors['bg_light'], fg=self.colors['text_light'],
-                                                  font=("Arial", 9),
-                                                  relief=tk.SUNKEN, bd=1)
+        self.info_text = scrolledtext.ScrolledText(info_frame, height=6, wrap=tk.WORD, bg=self.colors['bg_light'], fg=self.colors['text_light'], font=("Arial", 9), relief=tk.SUNKEN, bd=1)
         self.info_text.grid(row=0, column=0, sticky='nsew', padx=2, pady=2)
         
-        # Set initial canvas placeholders
         self.update_canvas_placeholder(self.original_canvas, "Select output folder to view textures")
         self.update_canvas_placeholder(self.replacement_canvas, "Click to select replacement texture")
     
@@ -1963,16 +1658,13 @@ class EchoVRTextureViewer:
         if canvas_width <= 1 or canvas_height <= 1:
             canvas_width, canvas_height = 400, 300
             
-        canvas.create_text(canvas_width//2, canvas_height//2, 
-                          text=text, font=("Arial", 10), 
-                          fill=self.colors['text_muted'], justify=tk.CENTER)
+        canvas.create_text(canvas_width//2, canvas_height//2, text=text, font=("Arial", 10), fill=self.colors['text_muted'], justify=tk.CENTER)
     
     def log_info(self, message):
         self.info_text.insert(tk.END, message + "\n")
         self.info_text.see(tk.END)
         self.info_text.update_idletasks()
     
-    # Folder selection methods
     def select_data_folder(self):
         path = filedialog.askdirectory(title="Select Data Folder (contains manifests and packages)")
         if path:
@@ -2012,11 +1704,9 @@ class EchoVRTextureViewer:
             self.set_extracted_folder(path)
     
     def set_extracted_folder(self, path):
-        """Set extracted folder and auto-set output folder to the same"""
         self.extracted_folder = path
         self.extracted_folder_label.config(text=os.path.basename(path), fg=self.colors['text_light'])
         
-        # Auto-set output folder to the same as extracted folder
         self.set_output_folder(path)
         
         self.update_evr_buttons_state()
@@ -2076,12 +1766,7 @@ class EchoVRTextureViewer:
         self.root.update_idletasks()
         
         def extraction_thread():
-            success, message = self.evr_tools.extract_package(
-                self.data_folder, 
-                self.package_name, 
-                self.extracted_folder
-            )
-            
+            success, message = self.evr_tools.extract_package(self.data_folder, self.package_name, self.extracted_folder)
             self.root.after(0, lambda: self.on_extraction_complete(success, message))
         
         threading.Thread(target=extraction_thread, daemon=True).start()
@@ -2122,7 +1807,6 @@ class EchoVRTextureViewer:
             messagebox.showerror("Error", "Please select data folder, package, and extraction folder first.")
             return
 
-        # Determine which input folder to use based on platform
         if self.is_quest_textures and self.quest_input_folder:
             input_folder = self.quest_input_folder
             self.log_info("🎯 Using Quest input folder for repacking")
@@ -2133,13 +1817,10 @@ class EchoVRTextureViewer:
             messagebox.showerror("Error", "Input folder not found. Please check input-pcvr/input-quest folders.")
             return
         
-        # Use output-both as default
         script_dir = os.path.dirname(os.path.abspath(__file__))
         output_dir = self.repacked_folder
         
-        # Ask for confirmation
-        confirm = messagebox.askyesno("Confirm Repack", 
-                                     f"Repack modified files to:\n{output_dir}\n\nContinue?")
+        confirm = messagebox.askyesno("Confirm Repack", f"Repack modified files to:\n{output_dir}\n\nContinue?")
         if not confirm:
             return
         
@@ -2147,13 +1828,7 @@ class EchoVRTextureViewer:
         self.root.update_idletasks()
         
         def repacking_thread():
-            success, message = self.evr_tools.repack_package(
-                output_dir, 
-                self.package_name, 
-                self.data_folder, 
-                input_folder
-            )
-            
+            success, message = self.evr_tools.repack_package(output_dir, self.package_name, self.data_folder, input_folder)
             self.root.after(0, lambda: self.on_repacking_complete(success, message, output_dir))
         
         threading.Thread(target=repacking_thread, daemon=True).start()
@@ -2178,7 +1853,6 @@ class EchoVRTextureViewer:
         
         messagebox.showinfo("Repacking Result", message)
     
-    # ADB methods
     def install_adb_tools(self):
         self.log_info("Installing ADB Platform Tools...")
         def install_thread():
@@ -2226,11 +1900,7 @@ class EchoVRTextureViewer:
             messagebox.showerror("ADB Error", f"Cannot connect to Quest:\n{message}")
             return
         
-        result = messagebox.askyesno(
-            "Push to Quest", 
-            "This will push files to your Quest headset.\n\nContinue?",
-            icon='warning'
-        )
+        result = messagebox.askyesno("Push to Quest", "This will push files to your Quest headset.\n\nContinue?", icon='warning')
         
         if not result:
             return
@@ -2243,8 +1913,7 @@ class EchoVRTextureViewer:
             try:
                 push_folder = self.output_folder
                 if self.repacked_folder and os.path.exists(self.repacked_folder):
-                    if (os.path.exists(os.path.join(self.repacked_folder, "manifests")) or 
-                        os.path.exists(os.path.join(self.repacked_folder, "packages"))):
+                    if (os.path.exists(os.path.join(self.repacked_folder, "manifests")) or os.path.exists(os.path.join(self.repacked_folder, "packages"))):
                         push_folder = self.repacked_folder
                         self.log_info("📦 Using repacked folder")
                 
@@ -2274,16 +1943,12 @@ class EchoVRTextureViewer:
         self.push_quest_btn.config(state=tk.NORMAL, bg=self.colors['accent_orange'], text="Push Files To Quest")
         self.update_quest_push_button()
     
-    # Texture management methods
     def set_output_folder(self, path):
-        """Set output folder and detect platform based on folder name"""
         self.output_folder = path
         
-        # Detect platform based on extracted folder name
         folder_name = os.path.basename(path).lower()
         
         if "quest" in folder_name:
-            # Quest mode
             self.is_quest_textures = True
             self.is_pcvr_textures = False
             self.textures_folder = os.path.join(path, "5231972605540061417")
@@ -2292,7 +1957,6 @@ class EchoVRTextureViewer:
             self.log_info("🎯 Switched to Quest mode")
             
         elif "pcvr" in folder_name:
-            # PCVR mode
             self.is_quest_textures = False
             self.is_pcvr_textures = True
             self.textures_folder = os.path.join(path, "-4707359568332879775")
@@ -2302,7 +1966,6 @@ class EchoVRTextureViewer:
             self.log_info("🎮 Switched to PCVR mode")
             
         else:
-            # Auto-detect based on folder contents
             quest_textures_folder = os.path.join(path, "5231972605540061417")
             pcvr_textures_folder = os.path.join(path, "-4707359568332879775")
             
@@ -2332,25 +1995,6 @@ class EchoVRTextureViewer:
             self.load_textures()
             ConfigManager.save_config(output_folder=self.output_folder)
             self.update_quest_push_button()
-    
-    def detect_texture_type(self, textures_folder):
-        """Detect texture type based on folder name"""
-        folder_name = os.path.basename(textures_folder)
-        if folder_name == "5231972605540061417":
-            self.is_quest_textures = True
-            self.is_pcvr_textures = False
-            self.platform_label.config(text="Platform: Quest (ASTC)", fg=self.colors['success'])
-            self.root.after(1000, self.update_quest_push_button)
-        elif folder_name == "-4707359568332879775":
-            self.is_quest_textures = False
-            self.is_pcvr_textures = True
-            self.platform_label.config(text="Platform: PCVR (DDS)", fg=self.colors['accent_blue'])
-            self.push_quest_btn.config(state=tk.DISABLED, bg=self.colors['bg_light'])
-        else:
-            self.is_quest_textures = False
-            self.is_pcvr_textures = False
-            self.platform_label.config(text="Platform: Unknown", fg=self.colors['warning'])
-            self.push_quest_btn.config(state=tk.DISABLED, bg=self.colors['bg_light'])
     
     def filter_textures(self, event=None):
         search_text = self.search_var.get().lower()
@@ -2527,10 +2171,7 @@ class EchoVRTextureViewer:
         if self.is_quest_textures:
             file_types = [("PNG files", "*.png"), ("All files", "*.*")]
             
-        file_path = filedialog.askopenfilename(
-            title="Select Replacement Texture",
-            filetypes=file_types
-        )
+        file_path = filedialog.askopenfilename(title="Select Replacement Texture", filetypes=file_types)
         
         if file_path:
             self.replacement_texture = file_path
@@ -2673,15 +2314,9 @@ class EchoVRTextureViewer:
             rep_height = self.replacement_info['height']
             
             if orig_width == rep_width and orig_height == rep_height:
-                self.resolution_status.config(
-                    text="✓ Resolutions match", 
-                    fg=self.colors['success']
-                )
+                self.resolution_status.config(text="✓ Resolutions match", fg=self.colors['success'])
             else:
-                self.resolution_status.config(
-                    text="✗ Resolutions don't match", 
-                    fg=self.colors['warning']
-                )
+                self.resolution_status.config(text="✗ Resolutions don't match", fg=self.colors['warning'])
         else:
             self.resolution_status.config(text="")
     
@@ -2708,13 +2343,7 @@ class EchoVRTextureViewer:
                 messagebox.showerror("Error", "Quest input folder not found. Please check input-quest folder exists.")
                 return
                 
-            success, message = TextureReplacer.replace_quest_texture(
-                self.output_folder,
-                self.quest_input_folder,
-                self.current_texture, 
-                self.replacement_texture,
-                self.texture_cache
-            )
+            success, message = TextureReplacer.replace_quest_texture(self.output_folder, self.quest_input_folder, self.current_texture, self.replacement_texture, self.texture_cache)
         else:
             if not self.pcvr_input_folder:
                 messagebox.showerror("Error", "PCVR input folder not found. Please check input-pcvr folder exists.")
@@ -2723,13 +2352,7 @@ class EchoVRTextureViewer:
             if self.replacement_info and 'file_size' in self.replacement_info:
                 replacement_size = self.replacement_info['file_size']
                 
-                success, message = TextureReplacer.replace_pcvr_texture(
-                    self.output_folder,
-                    self.pcvr_input_folder,
-                    self.current_texture, 
-                    self.replacement_texture,
-                    replacement_size
-                )
+                success, message = TextureReplacer.replace_pcvr_texture(self.output_folder, self.pcvr_input_folder, self.current_texture, self.replacement_texture, replacement_size)
             else:
                 messagebox.showerror("Error", "Could not determine replacement file size")
                 self.log_info("✗ Could not determine replacement file size")
@@ -2746,18 +2369,11 @@ class EchoVRTextureViewer:
             self.log_info(f"✗ {platform_text.upper()} REPLACEMENT FAILED: {message}")
     
     def download_textures(self):
-        """Starts the texture cache download in a separate thread"""
         if self.is_downloading:
             self.log_info("Download already in progress...")
             return
 
-        confirm = messagebox.askyesno(
-            "Download Textures",
-            "This will download a texture cache archive (~200-500MB) from GitHub \n"
-            "and extract it to the local '_internal' folder.\n\n"
-            "This may take a while depending on your internet connection.\n\n"
-            "Continue?"
-        )
+        confirm = messagebox.askyesno("Download Textures", "This will download a texture cache archive (~200-500MB) from GitHub \nand extract it to the local '_internal' folder.\n\nThis may take a while depending on your internet connection.\n\nContinue?")
         if not confirm:
             return
 
@@ -2768,10 +2384,8 @@ class EchoVRTextureViewer:
         threading.Thread(target=self._download_worker, daemon=True).start()
 
     def _download_worker(self):
-        """Worker thread for downloading and extracting textures"""
         url = "https://github.com/heisthecat31/EchoVR-Texture-Editor/releases/download/quest/texture_cache.zip"
         
-        # Determine extraction path: _internal folder next to script/exe
         if getattr(sys, 'frozen', False):
              application_path = os.path.dirname(sys.executable)
         else:
@@ -2781,12 +2395,10 @@ class EchoVRTextureViewer:
         temp_zip_path = os.path.join(tempfile.gettempdir(), "texture_cache.zip")
 
         try:
-            # 1. Download
             self.root.after(0, lambda: self.log_info(f"Downloading from: {url}"))
             urllib.request.urlretrieve(url, temp_zip_path)
             self.root.after(0, lambda: self.log_info("✓ Download complete."))
 
-            # 2. Extract
             self.root.after(0, lambda: self.log_info(f"Extracting to: {extract_to_path}"))
             if not os.path.exists(extract_to_path):
                 os.makedirs(extract_to_path)
@@ -2796,13 +2408,11 @@ class EchoVRTextureViewer:
 
             self.root.after(0, lambda: self.log_info("✓ Extraction complete."))
             
-            # 3. Cleanup
             try:
                 os.remove(temp_zip_path)
             except:
                 pass
             
-            # Success UI update
             self.root.after(0, lambda: self._on_download_finished(True, "Texture cache downloaded and extracted successfully!"))
 
         except Exception as e:
