@@ -21,3 +21,4 @@ IMPORTANT --> when making your dds textures do not use a converter, instead use 
 https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170#latest-supported-redistributable-version - THIS IS REQUIRED TO MAKE TEXCONV.EXE WORK.
 
 This now works with quest standalone, download quest data from https://mia.cdn.echo.taxi/_data.zip.
+<img width="1396" height="897" alt="Screenshot (205)" src="https://github.com/user-attachments/assets/81c32b3b-f92a-4752-9704-09cd30724d7e" />
