@@ -71,7 +71,11 @@ def run_hidden_command(cmd, cwd=None, timeout=None, capture_output=True):
 class ConfigManager:
     @staticmethod
     def load_config():
-        script_dir = os.path.dirname(os.path.abspath(__file__))
+        if getattr(sys, 'frozen', False):
+            script_dir = os.path.dirname(sys.executable)
+        else:
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+        
         default_config = {
             'output_folder': None,
             'data_folder': None,
@@ -82,6 +86,14 @@ class ConfigManager:
             'backup_folder': None,
             'renderdoc_path': None
         }
+        
+        # Check if folders exist, if not check parent directory
+        parent_dir = os.path.dirname(script_dir)
+        for folder_key in ['repacked_folder', 'pcvr_input_folder', 'quest_input_folder']:
+            if not os.path.exists(default_config[folder_key]):
+                parent_path = os.path.join(parent_dir, os.path.basename(default_config[folder_key]))
+                if os.path.exists(parent_path):
+                    default_config[folder_key] = parent_path
         
         try:
             if os.path.exists(CONFIG_FILE):
@@ -94,6 +106,11 @@ class ConfigManager:
                                 continue
                             if isinstance(value, str) and (key.endswith('_folder') or key.endswith('_path')):
                                 value = os.path.normpath(value)
+                                # If the saved path doesn't exist, check parent directory
+                                if not os.path.exists(value) and key in ['repacked_folder', 'pcvr_input_folder', 'quest_input_folder']:
+                                    parent_path = os.path.join(os.path.dirname(value), os.path.basename(value))
+                                    if os.path.exists(parent_path):
+                                        value = parent_path
                             default_config[key] = value
         except Exception as e:
             print(f"Config load error: {e}")
@@ -234,8 +251,9 @@ class TutorialPopup:
         popup.protocol("WM_DELETE_WINDOW", on_close)
 
 class UpdateEchoPopup:
-    def __init__(self, parent, config):
+    def __init__(self, parent, app, config):
         self.parent = parent
+        self.app = app
         self.config = config
         self.backup_location = None
         
@@ -314,8 +332,8 @@ Always create a backup before proceeding."""
         close_btn.pack()
     
     def log_info(self, message):
-        if hasattr(self.parent, 'log_info'):
-            self.parent.log_info(message)
+        if hasattr(self.app, 'log_info'):
+            self.app.log_info(message)
     
     def check_backup_exists(self):
         backup_folder = self.config.get('backup_folder')
@@ -1439,7 +1457,7 @@ class EchoVRTextureViewer:
         self.data_folder = self.config.get('data_folder')
         self.extracted_folder = self.config.get('extracted_folder')
         
-        self.repacked_folder = self.config.get('repacked_folder') or os.path.join(os.path.dirname(os.path.abspath(__file__)), "output-both")
+        self.repacked_folder = self.config.get('repacked_folder')
         
         self.package_name = None
         
@@ -1475,22 +1493,36 @@ class EchoVRTextureViewer:
             self.set_extracted_folder(self.extracted_folder)
     
     def auto_detect_folders(self):
-        script_dir = os.path.dirname(os.path.abspath(__file__))
+        if getattr(sys, 'frozen', False):
+            # Running as executable
+            application_path = os.path.dirname(sys.executable)
+            parent_dir = os.path.dirname(application_path)
+        else:
+            # Running as script
+            application_path = os.path.dirname(os.path.abspath(__file__))
+            parent_dir = os.path.dirname(application_path)
         
-        pcvr_folder = os.path.join(script_dir, "input-pcvr")
-        if os.path.exists(pcvr_folder):
-            self.pcvr_input_folder = pcvr_folder
-            self.log_info(f"Auto-detected PCVR input folder: {pcvr_folder}")
+        # Check both application_path and parent_dir
+        for base_dir in [application_path, parent_dir]:
+            pcvr_folder = os.path.join(base_dir, "input-pcvr")
+            if os.path.exists(pcvr_folder):
+                self.pcvr_input_folder = pcvr_folder
+                self.log_info(f"Auto-detected PCVR input folder: {pcvr_folder}")
+                break
+            
+        for base_dir in [application_path, parent_dir]:
+            quest_folder = os.path.join(base_dir, "input-quest")
+            if os.path.exists(quest_folder):
+                self.quest_input_folder = quest_folder
+                self.log_info(f"Auto-detected Quest input folder: {quest_folder}")
+                break
         
-        quest_folder = os.path.join(script_dir, "input-quest")
-        if os.path.exists(quest_folder):
-            self.quest_input_folder = quest_folder
-            self.log_info(f"Auto-detected Quest input folder: {quest_folder}")
-        
-        output_both = os.path.join(script_dir, "output-both")
-        if os.path.exists(output_both):
-            self.repacked_folder = output_both
-            self.log_info(f"Auto-detected output-both folder: {output_both}")
+        for base_dir in [application_path, parent_dir]:
+            output_both = os.path.join(base_dir, "output-both")
+            if os.path.exists(output_both):
+                self.repacked_folder = output_both
+                self.log_info(f"Auto-detected output-both folder: {output_both}")
+                break
     
     def setup_ui(self):
         self.root.columnconfigure(0, weight=1)
@@ -1510,7 +1542,7 @@ class EchoVRTextureViewer:
         title_label = tk.Label(header_frame, text="ECHO VR TEXTURE EDITOR", font=("Arial", 16, "bold"), fg=self.colors['text_light'], bg=self.colors['bg_dark'])
         title_label.pack(side=tk.LEFT, expand=True)
         
-        self.update_echo_btn = tk.Button(header_frame, text="⚠ Update EchoVR", command=lambda: UpdateEchoPopup(self, self.config), bg=self.colors['accent_red'], fg=self.colors['text_light'], font=("Arial", 10, "bold"), relief=tk.RAISED, bd=2, padx=15, pady=8)
+        self.update_echo_btn = tk.Button(header_frame, text="⚠ Update EchoVR", command=lambda: UpdateEchoPopup(self.root, self, self.config), bg=self.colors['accent_red'], fg=self.colors['text_light'], font=("Arial", 10, "bold"), relief=tk.RAISED, bd=2, padx=15, pady=8)
         self.update_echo_btn.pack(side=tk.RIGHT, padx=(10, 0))
         
         self.status_label = tk.Label(main_frame, text="Welcome to EchoVR Texture Editor", font=("Arial", 9), fg=self.colors['text_muted'], bg=self.colors['bg_dark'])
@@ -1554,6 +1586,9 @@ class EchoVRTextureViewer:
         
         self.repack_btn = tk.Button(button_frame, text="Repack Modified", command=self.repack_package, bg=self.colors['bg_light'], fg=self.colors['text_light'], font=("Arial", 10, "bold"), relief=tk.RAISED, bd=2, padx=20, pady=8, state=tk.DISABLED)
         self.repack_btn.pack(side=tk.LEFT, padx=5)
+
+        self.evr_status_label = tk.Label(evr_frame, text="Ready", font=("Arial", 9), fg=self.colors['text_muted'], bg=self.colors['bg_dark'])
+        self.evr_status_label.grid(row=4, column=0, columnspan=3, pady=(0, 10))
         
         content_frame = tk.Frame(main_frame, bg=self.colors['bg_dark'])
         content_frame.grid(row=4, column=0, columnspan=3, sticky='nsew')
@@ -1969,6 +2004,14 @@ class EchoVRTextureViewer:
             quest_textures_folder = os.path.join(path, "5231972605540061417")
             pcvr_textures_folder = os.path.join(path, "-4707359568332879775")
             
+            # Check parent directory if running as executable
+            if getattr(sys, 'frozen', False):
+                parent_dir = os.path.dirname(os.path.dirname(path))
+                if not os.path.exists(quest_textures_folder):
+                    quest_textures_folder = os.path.join(parent_dir, os.path.basename(path), "5231972605540061417")
+                if not os.path.exists(pcvr_textures_folder):
+                    pcvr_textures_folder = os.path.join(parent_dir, os.path.basename(path), "-4707359568332879775")
+            
             if os.path.exists(quest_textures_folder):
                 self.textures_folder = quest_textures_folder
                 self.corresponding_folder = os.path.join(path, "-2094201140079393352")
@@ -2014,23 +2057,39 @@ class EchoVRTextureViewer:
     
     def load_texture_cache(self):
         if self.is_quest_textures:
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-            cache_path = os.path.join(script_dir, "cache.json")
-            
-            if os.path.exists(cache_path):
-                try:
-                    with open(cache_path, 'r') as f:
-                        cache_data = json.load(f)
-                    
-                    self.texture_cache = {key: True for key in cache_data.keys()}
-                    self.log_info(f"Loaded texture cache: {len(self.texture_cache)} textures")
-                    
-                except Exception as e:
-                    self.log_info(f"Error loading cache.json: {e}")
-                    self.texture_cache = {}
+            if getattr(sys, 'frozen', False):
+                base_dir = os.path.dirname(sys.executable)
+                parent_dir = os.path.dirname(base_dir)
+                for check_dir in [base_dir, parent_dir]:
+                    cache_path = os.path.join(check_dir, "cache.json")
+                    if os.path.exists(cache_path):
+                        try:
+                            with open(cache_path, 'r') as f:
+                                cache_data = json.load(f)
+                            
+                            self.texture_cache = {key: True for key in cache_data.keys()}
+                            self.log_info(f"Loaded texture cache: {len(self.texture_cache)} textures")
+                            return
+                        except Exception as e:
+                            self.log_info(f"Error loading cache.json from {check_dir}: {e}")
             else:
-                self.log_info("cache.json not found")
-                self.texture_cache = {}
+                script_dir = os.path.dirname(os.path.abspath(__file__))
+                cache_path = os.path.join(script_dir, "cache.json")
+                
+                if os.path.exists(cache_path):
+                    try:
+                        with open(cache_path, 'r') as f:
+                            cache_data = json.load(f)
+                        
+                        self.texture_cache = {key: True for key in cache_data.keys()}
+                        self.log_info(f"Loaded texture cache: {len(self.texture_cache)} textures")
+                        
+                    except Exception as e:
+                        self.log_info(f"Error loading cache.json: {e}")
+                        self.texture_cache = {}
+                else:
+                    self.log_info("cache.json not found")
+                    self.texture_cache = {}
         else:
             self.texture_cache = {}
     
