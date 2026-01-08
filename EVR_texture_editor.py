@@ -22,8 +22,43 @@ except ImportError:
     messagebox.showerror("Missing Dependencies", "Pillow library is required but not installed.\nPlease install it manually: pip install Pillow")
     sys.exit(1)
 
-CONFIG_FILE = "config.json"
-CACHE_DIR = "texture_cache"
+# --- SETTINGS & PATH MANAGEMENT ---
+SETTINGS_DIR_NAME = "Settings"
+
+def get_base_dir():
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    else:
+        return os.path.dirname(os.path.abspath(__file__))
+
+def get_settings_path(filename):
+    base = get_base_dir()
+    settings_dir = os.path.join(base, SETTINGS_DIR_NAME)
+    if not os.path.exists(settings_dir):
+        try:
+            os.makedirs(settings_dir)
+        except: pass
+    return os.path.join(settings_dir, filename)
+
+def get_tool_path(tool_name):
+    # Check Settings folder first
+    settings_path = get_settings_path(tool_name)
+    if os.path.exists(settings_path):
+        return settings_path
+    
+    # Fallback to script dir for backward compatibility or initial setup
+    script_path = os.path.join(get_base_dir(), tool_name)
+    if os.path.exists(script_path):
+        return script_path
+        
+    return settings_path # Return the Settings path even if missing, so we know where it SHOULD be
+
+CONFIG_FILE = get_settings_path("config.json")
+CACHE_DIR = "texture_cache" # Image cache (thumbnails)
+CACHE2_FILE = get_settings_path("cache2.json") # New optimized cache
+LEGACY_CACHE_FILE = get_settings_path("cache.json")
+MAPPING_FILE = get_settings_path("texture_mapping.json")
+
 DECODE_CACHE = {}
 
 def run_hidden_command(cmd, cwd=None, timeout=None, capture_output=True):
@@ -68,27 +103,55 @@ def run_hidden_command(cmd, cwd=None, timeout=None, capture_output=True):
         else:
             return subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, cwd=cwd, timeout=timeout)
 
+# --- NEW CACHE MANAGER CLASS ---
+class TextureCacheManager:
+    @staticmethod
+    def load_cache():
+        if os.path.exists(CACHE2_FILE):
+            try:
+                with open(CACHE2_FILE, 'r') as f:
+                    return json.load(f)
+            except Exception:
+                return {}
+        return {}
+
+    @staticmethod
+    def save_cache(cache_data):
+        try:
+            with open(CACHE2_FILE, 'w') as f:
+                json.dump(cache_data, f, indent=2)
+        except Exception:
+            pass
+
+    @staticmethod
+    def get_cached_files(folder_path):
+        cache = TextureCacheManager.load_cache()
+        return cache.get(folder_path)
+
+    @staticmethod
+    def update_cache(folder_path, file_list):
+        cache = TextureCacheManager.load_cache()
+        cache[folder_path] = file_list
+        TextureCacheManager.save_cache(cache)
+
 class ConfigManager:
     @staticmethod
     def load_config():
-        if getattr(sys, 'frozen', False):
-            script_dir = os.path.dirname(sys.executable)
-        else:
-            script_dir = os.path.dirname(os.path.abspath(__file__))
+        base_dir = get_base_dir()
         
         default_config = {
             'output_folder': None,
             'data_folder': None,
             'extracted_folder': None,
-            'repacked_folder': os.path.join(script_dir, "output-both"),
-            'pcvr_input_folder': os.path.join(script_dir, "input-pcvr"),
-            'quest_input_folder': os.path.join(script_dir, "input-quest"),
+            'repacked_folder': os.path.join(base_dir, "output-both"),
+            'pcvr_input_folder': os.path.join(base_dir, "input-pcvr"),
+            'quest_input_folder': os.path.join(base_dir, "input-quest"),
             'backup_folder': None,
             'renderdoc_path': None
         }
         
         # Check if folders exist, if not check parent directory
-        parent_dir = os.path.dirname(script_dir)
+        parent_dir = os.path.dirname(base_dir)
         for folder_key in ['repacked_folder', 'pcvr_input_folder', 'quest_input_folder']:
             if not os.path.exists(default_config[folder_key]):
                 parent_path = os.path.join(parent_dir, os.path.basename(default_config[folder_key]))
@@ -656,7 +719,7 @@ class ADBManager:
 class ASTCTools:
     @staticmethod
     def load_texture_mapping(mapping_file):
-        if not mapping_file.exists():
+        if not os.path.exists(mapping_file):
             return {}
         
         try:
@@ -890,7 +953,7 @@ class ASTCTools:
     @staticmethod
     def load_decode_cache(cache_file):
         global DECODE_CACHE
-        if cache_file.exists():
+        if os.path.exists(cache_file):
             try:
                 with open(cache_file, 'r', encoding='utf-8') as f:
                     DECODE_CACHE = json.load(f)
@@ -902,14 +965,9 @@ class EVRToolsManager:
         self.tool_path = self.find_tool()
         
     def find_tool(self):
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        possible_paths = [
-            os.path.join(script_dir, "evrFileTools.exe"),
-            os.path.join(script_dir, "echoModifyFiles.exe"),
-            os.path.join(script_dir, "echoFileTools.exe"),
-        ]
-        
-        for path in possible_paths:
+        tool_names = ["evrFileTools.exe", "echoModifyFiles.exe", "echoFileTools.exe"]
+        for name in tool_names:
+            path = get_tool_path(name)
             if os.path.exists(path):
                 return path
         return None
@@ -1071,16 +1129,7 @@ class TextureLoader:
     
     @staticmethod
     def get_astcenc_path():
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        possible_paths = [
-            os.path.join(script_dir, "astcenc-avx2.exe"),
-            os.path.join(script_dir, "astcenc.exe"),
-        ]
-        
-        for path in possible_paths:
-            if os.path.exists(path):
-                return path
-        return None
+        return get_tool_path("astcenc-avx2.exe")
 
     @staticmethod
     def load_texture(texture_path, is_quest_texture=False):
@@ -1117,11 +1166,10 @@ class TextureLoader:
             texture_file = Path(texture_path)
             output_path = Path(temp_dir)
             
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-            mapping_file = Path(script_dir) / "texture_mapping.json"
+            # Use SETTINGS_DIR_NAME for mapping file
             mapping = {}
-            if mapping_file.exists():
-                mapping = ASTCTools.load_texture_mapping(mapping_file)
+            if os.path.exists(MAPPING_FILE):
+                mapping = ASTCTools.load_texture_mapping(MAPPING_FILE)
             
             success = ASTCTools.decode_with_mapping(astcenc_path, texture_file, output_path, mapping)
             if not success:
@@ -1173,8 +1221,7 @@ class TextureLoader:
         temp_dir = None
 
         try:
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-            texconv_path = os.path.join(script_dir, "texconv.exe")
+            texconv_path = get_tool_path("texconv.exe")
 
             if not os.path.exists(texconv_path):
                 return DDSHandler.create_format_preview(256, 256, "Missing texconv.exe", dds_path)
@@ -1363,11 +1410,10 @@ class TextureReplacer:
             if not astcenc_path:
                 return False, "astcenc not found"
             
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-            mapping_file = Path(script_dir) / "texture_mapping.json"
+            # Use SETTINGS_DIR_NAME for mapping file
             mapping = {}
-            if mapping_file.exists():
-                mapping = ASTCTools.load_texture_mapping(mapping_file)
+            if os.path.exists(MAPPING_FILE):
+                mapping = ASTCTools.load_texture_mapping(MAPPING_FILE)
             
             temp_output = os.path.join(tempfile.gettempdir(), f"encoded_{texture_name}")
             texture_name_no_ext = os.path.splitext(texture_name)[0]
@@ -1830,10 +1876,10 @@ class EchoVRTextureViewer:
             os.path.join(base_dir, "**", "5231972605540061417"),
         ]
         
-        for pattern in texture_patterns:
-            for path in glob.glob(pattern, recursive=True):
-                if os.path.isdir(path):
-                    return os.path.dirname(path)
+        for pattern in glob.glob(os.path.join(base_dir, "**"), recursive=True):
+             if os.path.basename(pattern) in ["-4707359568332879775", "5231972605540061417"]:
+                 if os.path.isdir(pattern):
+                     return os.path.dirname(pattern)
         
         return None
     
@@ -1983,6 +2029,7 @@ class EchoVRTextureViewer:
         
         folder_name = os.path.basename(path).lower()
         
+        # Simplified Logic for path detection
         if "quest" in folder_name:
             self.is_quest_textures = True
             self.is_pcvr_textures = False
@@ -2001,6 +2048,7 @@ class EchoVRTextureViewer:
             self.log_info("🎮 Switched to PCVR mode")
             
         else:
+            # Fallback checks
             quest_textures_folder = os.path.join(path, "5231972605540061417")
             pcvr_textures_folder = os.path.join(path, "-4707359568332879775")
             
@@ -2028,9 +2076,9 @@ class EchoVRTextureViewer:
                 self.push_quest_btn.config(state=tk.DISABLED, bg=self.colors['bg_light'])
                 self.log_info("🎮 Auto-detected PCVR textures")
             else:
-                messagebox.showerror("Error", "Texture folder not found!")
-                return
-        
+                self.textures_folder = path # Fallback to using the root
+                self.log_info("⚠ Could not determine platform structure, using root folder")
+
         if os.path.exists(self.textures_folder):
             platform_text = "Quest" if self.is_quest_textures else "PCVR"
             self.status_label.config(text=f"Output folder: {os.path.basename(path)} ({platform_text})")
@@ -2056,6 +2104,7 @@ class EchoVRTextureViewer:
         self.filter_textures()
     
     def load_texture_cache(self):
+        # Kept for compatibility with old cache method, though we prefer the new TextureCacheManager
         if self.is_quest_textures:
             if getattr(sys, 'frozen', False):
                 base_dir = os.path.dirname(sys.executable)
@@ -2094,31 +2143,17 @@ class EchoVRTextureViewer:
             self.texture_cache = {}
     
     def is_texture_file(self, file_name):
+        # This function is now mostly used inside the background thread logic
+        # or for single checks. The bulk logic moved to _load_textures_worker
         if self.is_quest_textures and self.texture_cache:
             name_without_ext = os.path.splitext(file_name)[0]
-            
-            if file_name in self.texture_cache:
+            if file_name in self.texture_cache or name_without_ext in self.texture_cache:
                 return True
-            elif name_without_ext in self.texture_cache:
-                return True
-            else:
-                return False
-        elif self.is_pcvr_textures:
-            file_path = os.path.join(self.textures_folder, file_name)
-            try:
-                with open(file_path, 'rb') as f:
-                    signature = f.read(4)
-                    if signature == b'DDS ':
-                        return True
-                    else:
-                        return False
-            except:
-                if file_name.lower().endswith('.dds'):
-                    return True
-                else:
-                    return False
+            return False
         
-        return True
+        # PCVR check moved to bulk heuristic
+        if file_name.lower().endswith('.dds'): return True
+        return True # Default assume true if heuristic passed
     
     def load_textures(self):
         self.file_list.delete(0, tk.END)
@@ -2126,48 +2161,142 @@ class EchoVRTextureViewer:
         self.update_canvas_placeholder(self.original_canvas, "Loading textures...")
         self.root.update_idletasks()
         
+        # Load legacy cache if needed
         self.load_texture_cache()
         
-        try:
-            texture_count = 0
-            texture_files = []
+        # START BACKGROUND THREAD
+        threading.Thread(target=self._load_textures_worker, daemon=True).start()
+
+    def _load_textures_worker(self):
+        if not self.textures_folder or not os.path.exists(self.textures_folder):
+             self.root.after(0, lambda: self._on_textures_loaded([], 0))
+             return
+
+        def update_platform_ui():
+            platform_text = "PCVR" if self.is_pcvr_textures else "Quest"
+            color = self.colors['accent_blue'] if self.is_pcvr_textures else self.colors['success']
+            self.platform_label.config(text=f"Platform: {platform_text} (Detected)", fg=color)
+            if self.output_folder:
+                self.status_label.config(text=f"Output folder: {os.path.basename(self.output_folder)} ({platform_text})")
+
+        # 1. Check persistent cache (New Cache System) - Loads instantly if available
+        cached_files = TextureCacheManager.get_cached_files(self.textures_folder)
+        
+        if cached_files is not None:
+            # Platform Check from Cache: Check ONE file to determine platform
+            is_dds = False
+            if len(cached_files) > 0:
+                check_file = os.path.join(self.textures_folder, cached_files[0])
+                # We check if the file still exists and verify its header
+                if os.path.exists(check_file):
+                    try:
+                        with open(check_file, 'rb') as f:
+                            sig = f.read(4)
+                            if sig == b'DDS ':
+                                is_dds = True
+                    except: pass
             
-            if not os.path.exists(self.textures_folder):
-                self.log_info("Textures folder not found!")
-                return
-                
-            for file_name in os.listdir(self.textures_folder):
-                file_path = os.path.join(self.textures_folder, file_name)
-                if os.path.isfile(file_path):
-                    
-                    if not self.is_texture_file(file_name):
-                        continue
-                        
-                    texture_files.append(file_name)
-                    texture_count += 1
-            
-            self.all_textures = sorted(texture_files)
-            self.filtered_textures = self.all_textures.copy()
-            
-            self.file_list.delete(0, tk.END)
-            for file_name in self.filtered_textures:
-                self.file_list.insert(tk.END, file_name)
-                
-            platform_text = "Quest" if self.is_quest_textures else "PCVR"
-            status_text = f"Found {texture_count} {platform_text} texture files"
-            self.status_label.config(text=status_text)
-            self.log_info(f"Found {texture_count} {platform_text} texture files")
-            
-            if texture_count == 0:
-                self.log_info("No texture files found.")
-                self.update_canvas_placeholder(self.original_canvas, "No textures found")
+            if is_dds:
+                self.is_pcvr_textures = True
+                self.is_quest_textures = False
             else:
-                self.update_canvas_placeholder(self.original_canvas, "Select a texture to view")
+                self.is_pcvr_textures = False
+                self.is_quest_textures = True
                 
+            self.root.after(0, update_platform_ui)
+            self.root.after(0, lambda: self._on_textures_loaded(cached_files, len(cached_files)))
+            return
+
+        # 2. No Cache - Full Scan & Filter
+        valid_files = []
+        dds_files = []
+        all_files_scanned = []
+        
+        try:
+            raw_file_list = os.listdir(self.textures_folder)
+            
+            # --- PCVR CHECK: Look for DDS headers ---
+            for f in raw_file_list:
+                full_path = os.path.join(self.textures_folder, f)
+                if os.path.isfile(full_path):
+                    all_files_scanned.append(f)
+                    try:
+                        with open(full_path, 'rb') as f_obj:
+                            sig = f_obj.read(4)
+                            if sig == b'DDS ':
+                                dds_files.append(f)
+                    except:
+                        pass
+            
+            # Decision Time: If we found ANY DDS files, assume PCVR and filter strictly.
+            if len(dds_files) > 0:
+                # It's PCVR
+                self.is_pcvr_textures = True
+                self.is_quest_textures = False
+                valid_files = dds_files # Filter out non-DDS junk
+            else:
+                # It's Quest (or generic)
+                self.is_pcvr_textures = False
+                self.is_quest_textures = True
+                
+                # --- QUEST CHECK: Filter using Mapping and Legacy Cache ---
+                # Load known texture lists from Settings
+                known_textures = set()
+                
+                # Load Mapping
+                if os.path.exists(MAPPING_FILE):
+                    try:
+                        with open(MAPPING_FILE, 'r') as f:
+                            mapping = json.load(f)
+                            for k in mapping.keys():
+                                known_textures.add(k)
+                    except: pass
+                
+                # Load Legacy Cache
+                if os.path.exists(LEGACY_CACHE_FILE):
+                    try:
+                        with open(LEGACY_CACHE_FILE, 'r') as f:
+                            legacy_cache = json.load(f)
+                            for k in legacy_cache.keys():
+                                known_textures.add(k)
+                    except: pass
+                
+                if known_textures:
+                     # Filter files that match known texture names/hashes
+                     valid_files = [f for f in all_files_scanned if f in known_textures or os.path.splitext(f)[0] in known_textures]
+                else:
+                     # Fallback if no mapping exists (dangerous, but necessary if fresh install without cache)
+                     valid_files = all_files_scanned
+
+            # Update Cache with the filtered list
+            TextureCacheManager.update_cache(self.textures_folder, valid_files)
+            
+            self.root.after(0, update_platform_ui)
+            self.root.after(0, lambda: self._on_textures_loaded(valid_files, len(valid_files)))
+            
         except Exception as e:
-            self.log_info(f"Error loading textures: {e}")
-            self.update_canvas_placeholder(self.original_canvas, "Error loading textures")
-    
+            print(f"Scan Error: {e}")
+            self.root.after(0, lambda: self._on_textures_loaded([], 0))
+
+    def _on_textures_loaded(self, files, count):
+        self.all_textures = sorted(files)
+        self.filtered_textures = self.all_textures.copy()
+        
+        self.file_list.delete(0, tk.END)
+        for file_name in self.filtered_textures:
+            self.file_list.insert(tk.END, file_name)
+            
+        platform_text = "Quest" if self.is_quest_textures else "PCVR"
+        status_text = f"Found {count} {platform_text} texture files"
+        self.status_label.config(text=status_text)
+        self.log_info(f"Found {count} {platform_text} texture files")
+        
+        if count == 0:
+            self.log_info("No texture files found.")
+            self.update_canvas_placeholder(self.original_canvas, "No textures found")
+        else:
+            self.update_canvas_placeholder(self.original_canvas, "Select a texture to view")
+
     def on_texture_selected(self, event):
         if not self.file_list.curselection():
             return
