@@ -972,7 +972,7 @@ class EVRToolsManager:
                 return path
         return None
     
-    def extract_package(self, data_dir, package_name, output_dir):
+    def extract_package(self, data_dir, package_name, output_dir, textures_only=False):
         if not self.tool_path:
             return False, "evrFileTools.exe not found"
         
@@ -984,6 +984,9 @@ class EVRToolsManager:
                 "-dataDir", data_dir,
                 "-outputDir", output_dir
             ]
+            
+            if textures_only:
+                cmd.append("-texturesonly")
             
             result = run_hidden_command(cmd, cwd=os.path.dirname(self.tool_path), timeout=2000)
             
@@ -1840,14 +1843,48 @@ class EchoVRTextureViewer:
         if not all([self.data_folder, self.package_name, self.extracted_folder]):
             messagebox.showerror("Error", "Please select data folder, package, and extraction folder first.")
             return
+
+        # Custom Popup for Extraction Mode
+        popup = tk.Toplevel(self.root)
+        popup.title("Extraction Mode")
+        popup.geometry("400x180")
+        popup.configure(bg=self.colors['bg_medium'])
+        popup.resizable(False, False)
+        popup.transient(self.root)
+        popup.grab_set()
+
+        # Center popup
+        try:
+            x = self.root.winfo_x() + (self.root.winfo_width() - 400) // 2
+            y = self.root.winfo_y() + (self.root.winfo_height() - 180) // 2
+            popup.geometry(f"+{x}+{y}")
+        except: pass
+
+        tk.Label(popup, text="Select Extraction Mode", font=("Arial", 12, "bold"), fg=self.colors['text_light'], bg=self.colors['bg_medium']).pack(pady=(20, 10))
+        tk.Label(popup, text="Texture mode is faster but only extracts texture files.", font=("Arial", 9), fg=self.colors['text_muted'], bg=self.colors['bg_medium']).pack(pady=(0, 20))
+
+        btn_frame = tk.Frame(popup, bg=self.colors['bg_medium'])
+        btn_frame.pack(fill=tk.X, padx=20)
+
+        def do_extract(textures_only):
+            popup.destroy()
+            self._run_extraction(textures_only)
+
+        tk.Button(btn_frame, text="Extract Textures Only (Fast)", command=lambda: do_extract(True), 
+                 bg=self.colors['accent_green'], fg=self.colors['text_light'], font=("Arial", 10, "bold"), relief=tk.RAISED).pack(fill=tk.X, pady=5)
         
+        tk.Button(btn_frame, text="Extract Full Package (Slow)", command=lambda: do_extract(False), 
+                 bg=self.colors['bg_light'], fg=self.colors['text_light'], font=("Arial", 9), relief=tk.RAISED).pack(fill=tk.X, pady=5)
+
+    def _run_extraction(self, textures_only):
         os.makedirs(self.extracted_folder, exist_ok=True)
         
-        self.evr_status_label.config(text="Extracting package...", fg=self.colors['accent_green'])
+        mode_text = "Textures Only" if textures_only else "Full Package"
+        self.evr_status_label.config(text=f"Extracting package ({mode_text})...", fg=self.colors['accent_green'])
         self.root.update_idletasks()
         
         def extraction_thread():
-            success, message = self.evr_tools.extract_package(self.data_folder, self.package_name, self.extracted_folder)
+            success, message = self.evr_tools.extract_package(self.data_folder, self.package_name, self.extracted_folder, textures_only=textures_only)
             self.root.after(0, lambda: self.on_extraction_complete(success, message))
         
         threading.Thread(target=extraction_thread, daemon=True).start()
